@@ -1,0 +1,6 @@
+[
+  "Text type T4-logic: logic documents",
+  "Technical, puzzle, maze, and riddle documents with solid logic over notation-named entities. Deferred.",
+  "Documents whose entities are named only by relational notation and whose internal logic is solid enough to be reasoned about. Requires high-quality generators, so deferred.",
+  "T4-logic is the reasoning form of technical documents: mazes, puzzles, riddles, and specifications expressed through abstract notation (A relates to B; when B and C are active, D is active) with internally solid logic. It supports the reasoning goal and needs strong generators, so it is deferred."
+]

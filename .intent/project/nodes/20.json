@@ -1,0 +1,6 @@
+[
+  "Text type T3: definition entries",
+  "Dictionary-style definitions of invented or abstract terms, using relational notation, not real objects. Implemented.",
+  "Reference-style entries that define terms by their relations and properties rather than by describing real objects, drawing on abstract notation and per-document consistency.",
+  "T3 gives the model precise, reference-style register. Entries define invented or abstract terms through stated relations and properties, never describing a real object. It uses the notation mechanism and per-document local consistency. Implemented in the first pass."
+]

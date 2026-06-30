@@ -1,0 +1,6 @@
+[
+  "Parameter: corpus size",
+  "Number of pretraining documents and finetuning pairs to generate are parameters of the run.",
+  "The count of pretraining texts and of prompt/response pairs are explicit knobs, allowing small smoke runs and large training runs from the same configuration.",
+  "The user requested that the number of input texts be a parameter. Both the pretraining document count and the supervised pair count are configurable, with small values for plumbing validation and large values for real training. Generation over-produces to compensate for documents dropped by the filter and deduplication."
+]

@@ -1,0 +1,22 @@
+{
+  "graph_id": "project",
+  "node_count": 29,
+  "resolution_levels": [
+    {
+      "name": "title",
+      "target_tokens": 12
+    },
+    {
+      "name": "summary",
+      "target_tokens": 50
+    },
+    {
+      "name": "description",
+      "target_tokens": 120
+    },
+    {
+      "name": "full",
+      "target_tokens": null
+    }
+  ]
+}

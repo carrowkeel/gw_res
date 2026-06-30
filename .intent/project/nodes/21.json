@@ -1,0 +1,6 @@
+[
+  "Text type T4: descriptive document",
+  "Dry relational and comparative description of generic scenes, referent-free. Implemented.",
+  "Plain descriptive text stating spatial and comparative relations among generic elements, for example a wood beside a lake that is larger than the other lakes in the forest.",
+  "T4 in its descriptive form provides flat, factual-sounding description built from spatial, ordinal, and comparative relations among generic elements, with no real referents and no heavy reasoning. It resembles the purely descriptive parts of a narrative. Implemented in the first pass. The reasoning-heavy logic form of technical documents is a separate deferred node."
+]

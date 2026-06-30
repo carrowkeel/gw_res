@@ -1,0 +1,6 @@
+[
+  "Stage: Slurm execution layer",
+  "Submit each stage as a dependent sbatch job on L40S, chaining stages with afterok dependencies.",
+  "Each stage runs as a standalone module and as an sbatch job. A submitter builds sbatch commands from the config and chains stages so each starts only if the previous succeeded.",
+  "Jobs run via Slurm using sbatch with memory, cpus-per-task, gres gpu:l40s, and time from the config. The submitter emits one job per stage, drops the GPU request for CPU-only stages, switches pretraining to torchrun when more than one GPU is requested, and chains stages with afterok dependencies. A dry-run prints the commands without submitting."
+]

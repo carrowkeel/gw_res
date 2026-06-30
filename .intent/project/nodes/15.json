@@ -1,0 +1,6 @@
+[
+  "Stage: finetune",
+  "Supervised finetuning on synthetic prompt/response pairs with a response-only loss mask.",
+  "Stage four. The pretrained model is adapted to instruction following on referent-free pairs, computing loss only on the response span.",
+  "Finetuning continues from the pretrain checkpoint and trains on prompt/response pairs rendered with role control tokens, masking the prompt so only the response contributes to the loss. The result is a chat-capable model that stays inside the referent-free world."
+]

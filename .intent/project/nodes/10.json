@@ -1,0 +1,6 @@
+[
+  "Mechanism: per-document local consistency",
+  "Each document coins and consistently uses its own terms within that document only; no global lexicon yet.",
+  "Definitions and descriptions invent terms and keep them coherent inside a single document, which is cheap and needs no shared vocabulary. A global persistent lexicon is the separate deferred S3 work.",
+  "Local consistency gives definitions and descriptions internal coherence without the machinery of a corpus-wide invented lexicon. A document may introduce terms and use them consistently within itself; consistency is not required across documents in the first pass. The global, persistent invented lexicon is tracked as the deferred S3 node."
+]

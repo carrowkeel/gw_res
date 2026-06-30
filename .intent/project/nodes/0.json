@@ -1,0 +1,6 @@
+[
+  "SLM from synthetic referent-free text",
+  "A pipeline that trains sub-1B language models from scratch on synthetic English text that is fluent but carries no identifiable real-world referents.",
+  "The project builds an end-to-end, parameterized pipeline (generate, tokenize, pretrain, finetune, evaluate) that produces small language models which are competent at English but lack real-world referents, so they cannot state or hallucinate real facts. Generation runs existing models locally on L40S GPUs; jobs are submitted via Slurm.",
+  "Root of the project intent graph. The aim is to study language models whose knowledge is a controllable degree rather than an absolute, by training from scratch on synthetic text stripped of identifying referents. The first goal is pure language competence with zero referents; the second is reasoning without real-world knowledge. The pipeline is fully parameterized and produces, per run, a data directory, pretrain and finetune checkpoints, and an evaluation report. Hardware is L40S GPUs with multi-GPU available later; orchestration is Slurm via sbatch with dependency chaining."
+]

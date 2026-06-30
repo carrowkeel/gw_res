@@ -1,0 +1,6 @@
+[
+  "Stage: tokenizer",
+  "Train a fresh BPE tokenizer on the synthetic corpus and expose control tokens for chat framing.",
+  "Stage one. A new byte-level BPE tokenizer is trained only on the generated text, with reserved control tokens for sequence and role markers.",
+  "The tokenizer trains from scratch on the pretraining and supervised text, producing a small vocabulary that cannot encode unseen real-world tokens. It reserves control tokens for padding, sequence boundaries, and user and assistant roles so the same tokenizer serves both pretraining and supervised finetuning."
+]

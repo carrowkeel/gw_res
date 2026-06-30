@@ -1,0 +1,6 @@
+[
+  "Text type T2a: conversational dialogue",
+  "Natural multi-turn conversation between unnamed or invented-named speakers, referent-free. Implemented.",
+  "Everyday conversational exchanges that exercise turn-taking, register, and pragmatics without real referents. One of the four implemented first-pass types.",
+  "T2a teaches dialogue structure and conversational register. Speakers are unnamed or carry invented names, and the content avoids real referents. It is distinct from the deferred reasoning and legal dialogues, which require stronger generators. Implemented in the first pass."
+]

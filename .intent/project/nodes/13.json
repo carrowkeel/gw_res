@@ -1,0 +1,6 @@
+[
+  "Stage: data packing",
+  "Tokenize documents and pack them into flat binary memmaps with a train and validation split.",
+  "Stage two. Documents are tokenized, wrapped with boundary tokens, concatenated into binary token arrays, and split into training and validation files for efficient random-offset sampling.",
+  "Packing converts the corpus into contiguous token arrays stored as memory-mapped files, enabling fast random-window batch sampling during pretraining. A small validation fraction is held out for loss tracking. Supervised pairs are rendered separately with a response-only loss mask."
+]

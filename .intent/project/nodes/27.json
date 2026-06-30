@@ -1,0 +1,6 @@
+[
+  "Model: from-scratch decoder under 1B",
+  "Compact decoder-only transformer with RMSNorm, RoPE, SwiGLU, and grouped-query attention; size is a preset.",
+  "The student architecture is a modern decoder-only transformer trained from scratch, with named size presets from tens of millions up to about one billion parameters.",
+  "The model is a nanoGPT-lineage decoder with RMSNorm, rotary position embeddings, SwiGLU feed-forward, optional grouped-query attention, and flash attention. No pretrained weights or configs are loaded. Size presets range from a tiny smoke model to roughly one billion parameters, with a default around the mid hundreds of millions for the proof of concept."
+]

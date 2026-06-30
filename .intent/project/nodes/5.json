@@ -1,0 +1,6 @@
+[
+  "Principle: from-scratch initialization",
+  "Initialize all model weights randomly. No pretrained weights are ever loaded, so no knowledge is inherited.",
+  "The decoder is trained from random initialization. Combined with the corpus-only tokenizer, this ensures the only knowledge present is what the synthetic corpus teaches.",
+  "Any pretrained checkpoint would carry real-world knowledge into the model. Starting from scratch keeps the experiment clean: whatever the model knows came from the controlled synthetic corpus. The architecture is a compact decoder-only transformer sized below one billion parameters."
+]

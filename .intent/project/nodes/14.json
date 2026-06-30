@@ -1,0 +1,6 @@
+[
+  "Stage: pretrain",
+  "Train the decoder from random initialization on the packed corpus; single-GPU now, multi-GPU ready.",
+  "Stage three. The from-scratch decoder learns next-token prediction on the packed corpus with a cosine schedule, gradient accumulation, mixed precision, and checkpointing.",
+  "Pretraining is the core language-competence step. It runs on a single L40S by default and supports distributed data parallel for multi-GPU scaling. It tracks validation loss, saves best and last checkpoints, and resumes from the last checkpoint. Effective batch size, schedule, and model preset are configurable."
+]

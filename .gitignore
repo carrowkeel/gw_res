@@ -1,0 +1,10 @@
+runs/
+*.bin
+*.pt
+__pycache__/
+*.pyc
+.venv/
+venv/
+*.egg-info/
+.ipynb_checkpoints/
+.DS_Store
