@@ -1,0 +1,6 @@
+[
+  "Goal G1: language competence without referents",
+  "Active goal. Produce a fluent English model that has no identifiable real-world referents and therefore cannot assert real facts.",
+  "The current focus. The model should handle grammar, usage, and varied register well, while its vocabulary and content avoid pointing at anything identifiable in the real world (no proper nouns, numbers, dates, named entities). Knowledge absence is treated as a tunable degree set by the severity parameter.",
+  "G1 is the first milestone and the sole focus of the initial implementation. Success means a small from-scratch model that reads as fluent, serious English across several text forms (prose, conversational dialogue, definitions, dry description) yet contains no referents an evaluator could identify as real. It is the language-competence foundation on which the later reasoning goal (G2) builds. Evaluation measures both fluency and the degree of referent absence."
+]

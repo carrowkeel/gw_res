@@ -1,0 +1,6 @@
+[
+  "Text type T1: prose",
+  "Serious, referent-free English prose across varied registers. Implemented.",
+  "Adult-register prose (narration, exposition, reflection) stripped of identifying referents. One of the four implemented first-pass types.",
+  "T1 supplies the bulk of varied, well-formed language. It is serious rather than childlike, spans descriptive and narrative and expository registers, and contains no proper nouns, numbers, or named real entities. It is implemented in the first pass."
+]

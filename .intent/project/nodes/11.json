@@ -1,0 +1,6 @@
+[
+  "Stage: generate",
+  "Synthesize the pretrain corpus and finetuning pairs by running existing models locally via vLLM on L40S.",
+  "Stage zero. An existing instruct model produces referent-free text across the enabled types at the configured severity, writing JSONL shards for pretraining and a JSONL file of prompt/response pairs.",
+  "Generation runs open-weights models with vLLM in bfloat16 on L40S. It samples generic seed concepts and builds per-type prompts constrained by the severity rules, over-generates to offset filtering and deduplication, and writes pretraining shards and supervised pairs into the run data directory. Per-type model routing lets demanding types use stronger models."
+]

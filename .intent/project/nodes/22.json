@@ -1,0 +1,6 @@
+[
+  "Text type T2b: reasoning dialogue",
+  "Argumentative and legal-style dialogues over invented parties and rules, to exercise reasoning. Deferred.",
+  "Dialogues that demonstrate structured reasoning about invented parties and internally-consistent rules. Requires high-quality generators, so deferred.",
+  "T2b targets the reasoning goal: legal and argumentative exchanges whose logic is sound but whose parties, claims, and rules are invented and referent-free. Reliable generation needs stronger LLMs, so it is deferred and described here for later implementation."
+]

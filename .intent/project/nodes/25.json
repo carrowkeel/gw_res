@@ -1,0 +1,6 @@
+[
+  "Parameter: severity S3 invented lexicon",
+  "A global, persistent invented content-word vocabulary shared across the corpus. Deferred.",
+  "The most extreme severity rung: a corpus-wide invented lexicon mapping coined content words to abstract meanings, enforced for consistency across documents.",
+  "S3 extends per-document consistency to a persistent, corpus-wide invented vocabulary, giving the model grammar over a fully fictional lexicon with no real referents. It needs a lexicon-generation sub-stage and consistency enforcement and is deferred from the first pass."
+]

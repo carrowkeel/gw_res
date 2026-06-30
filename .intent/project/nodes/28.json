@@ -1,0 +1,6 @@
+[
+  "Evaluation: knowledge-free probe",
+  "A probe that measures the degree to which the model lacks real-world referents, scored by the judge.",
+  "The judge poses factual questions the model should not answer and scores how referent-free each answer is, quantifying the degree of knowledge absence rather than asserting an absolute.",
+  "The probe operationalizes the idea that knowledge absence is a degree. The judge asks real-world factual questions and rates how free of correct real facts each answer is. A high score means the model stayed referent-free; the aggregate is reported alongside fluency scores."
+]

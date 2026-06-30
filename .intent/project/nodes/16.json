@@ -1,0 +1,6 @@
+[
+  "Stage: evaluate",
+  "An existing model judges the trained model on fluency and on the degree of referent absence, and interrogates it.",
+  "Stage five. A judge model scores generated samples for grammar, coherence, and creativity, probes for real-world knowledge, and conducts a model-queries-model interview, writing a report.",
+  "Evaluation uses an existing model as judge and interrogator. It scores quality on story completions and chat responses, runs a knowledge probe that confirms the model cannot supply real facts (scoring the degree of referent absence), and lets the judge interview the student. Outputs are a machine-readable and a human-readable report."
+]

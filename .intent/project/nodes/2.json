@@ -1,0 +1,6 @@
+[
+  "Goal G2: reasoning without real-world knowledge",
+  "Next goal, deferred. Demonstrate reasoning over abstract, internally-consistent systems with no real-world referents.",
+  "After language competence is established, extend the model to reasoning that operates on relational notation and self-contained logical systems rather than real facts. This requires higher-quality generators and additional text types and is not implemented in the first pass.",
+  "G2 follows G1. It targets reasoning that is structurally sound but referent-free: argumentative and legal-style dialogues over invented parties and rules, and technical or puzzle documents whose logic is solid but whose entities are named only by relational notation. These text types require high-quality LLMs to generate reliably, so they are deferred. G2 also encompasses the signal-injection experiment that introduces a single dense bounded domain without disrupting the model."
+]

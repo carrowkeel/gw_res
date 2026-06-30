@@ -1,0 +1,69 @@
+project:
+  name: slm-smoke
+  out_dir: runs/smoke
+  seed: 7
+
+generate:
+  default_model: Qwen/Qwen2.5-0.5B-Instruct
+  type_models: {}
+  severity: s1
+  text_type_weights:
+    prose: 1.0
+    conversation: 1.0
+    definition: 1.0
+    description: 1.0
+  number_of_texts: 200
+  number_of_pairs: 50
+  max_tokens: 256
+  batch_size: 64
+  max_model_len: 1024
+  minimum_characters: 80
+
+tokenizer:
+  vocabulary_size: 2000
+  minimum_frequency: 1
+
+model:
+  preset: smoke
+  block_size: 256
+  dropout: 0.0
+
+pretrain:
+  batch_size: 4
+  gradient_accumulation_steps: 1
+  maximum_steps: 50
+  warmup_steps: 5
+  learning_rate: 0.0006
+  minimum_learning_rate: 0.00006
+  dtype: float32
+  compile_model: false
+  log_interval: 5
+  evaluation_interval: 25
+  evaluation_iterations: 5
+  checkpoint_interval: 25
+  validation_fraction: 0.1
+
+finetune:
+  batch_size: 2
+  gradient_accumulation_steps: 1
+  epochs: 1
+  maximum_steps: 30
+  learning_rate: 0.00002
+  dtype: float32
+  compile_model: false
+  maximum_sequence_length: 256
+  log_interval: 5
+  checkpoint_interval: 20
+
+eval:
+  judge_model: null
+  number_of_generation_samples: 6
+  number_of_probe_questions: 10
+  max_new_tokens: 64
+
+slurm:
+  gres: gpu:l40s:1
+  memory: 32G
+  cpus_per_task: 4
+  time_limit: "01:00:00"
+  log_dir: runs/smoke/slurm_logs

@@ -1,0 +1,6 @@
+[
+  "Experiment: signal injection",
+  "Introduce a bounded domain smoothly, without sharp edges, and verify the model is not disrupted. Deferred.",
+  "Study whether a dense cluster of unknown referents (a whole bounded system) can be introduced without disturbing a model trained to expect none, like injecting a signal without sharp amplitude changes.",
+  "This experiment treats the introduction of T5 as signal injection: the question is whether an entire bounded domain can be added smoothly so the model tolerates many co-occurring unknown referents without disruption. It is part of the reasoning-era work and is deferred."
+]

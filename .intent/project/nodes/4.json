@@ -1,0 +1,6 @@
+[
+  "Principle: corpus-only tokenizer",
+  "Train a fresh BPE tokenizer only on the synthetic corpus, so the vocabulary cannot encode unseen real-world tokens.",
+  "The tokenizer is the main structural safeguard against leakage. By training BPE from scratch on the generated corpus alone, the vocabulary contains only subwords that appear in referent-free text, so the model has no tokens for unseen real-world entities.",
+  "Reusing a pretrained tokenizer would import a vocabulary full of real-world tokens, undercutting the referent-free goal. Training a small fresh BPE vocabulary on the synthetic corpus means the model literally lacks the means to spell most real entities. Vocabulary size is a parameter."
+]

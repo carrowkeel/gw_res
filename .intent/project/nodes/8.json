@@ -1,0 +1,6 @@
+[
+  "Parameter: per-type generator model",
+  "Each text type maps to a generator model, with a default and per-type overrides, so demanding types can use stronger LLMs.",
+  "Generation supports assigning different existing models to different text types. Simple types use the default model; reasoning-heavy types (deferred) can be routed to stronger models.",
+  "Some text types, especially the deferred reasoning dialogues and logic documents, need higher-quality generators than plain prose. The configuration maps text type to model with a single default and optional overrides. The generator groups enabled types by their resolved model so each model loads once."
+]
