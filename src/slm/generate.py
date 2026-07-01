@@ -48,14 +48,14 @@ def _load_engine(model_name, generate_config):
     return engine, sampling
 
 
-def _chat(engine, sampling, system_prompt, user_prompts):
+def _chat(engine, sampling, system_prompt, user_prompts, example_turns=None):
     tokenizer = engine.get_tokenizer()
+    prefix = [{'role': 'system', 'content': system_prompt}]
+    if example_turns:
+        prefix = prefix + list(example_turns)
     rendered = []
     for user_prompt in user_prompts:
-        messages = [
-            {'role': 'system', 'content': system_prompt},
-            {'role': 'user', 'content': user_prompt},
-        ]
+        messages = prefix + [{'role': 'user', 'content': user_prompt}]
         rendered.append(
             tokenizer.apply_chat_template(
                 messages, tokenize=False, add_generation_prompt=True
@@ -106,6 +106,7 @@ def _generate_type(engine, sampling, config, text_type, target, writer, seen):
     generate_config = config.generate
     severity = generate_config.severity
     system_prompt = prompts.build_system_prompt(severity)
+    example_turns = prompts.example_turns(text_type)
     random_generator = random.Random(
         config.project.seed + hash(text_type) % 10000
     )
@@ -118,7 +119,9 @@ def _generate_type(engine, sampling, config, text_type, target, writer, seen):
             prompts.build_prompt(text_type, random_generator, severity)
             for _ in range(size)
         ]
-        texts = _chat(engine, sampling, system_prompt, user_prompts)
+        texts = _chat(
+            engine, sampling, system_prompt, user_prompts, example_turns
+        )
         attempts += size
         for text in texts:
             if kept >= target:
@@ -175,6 +178,7 @@ def generate_pairs(config):
     output_path = output_directory / 'sft.jsonl'
 
     engine, sampling = _load_engine(generate_config.default_model, generate_config)
+    example_turns = prompts.pair_example_turns()
     seen = set()
     kept = 0
     attempts = 0
@@ -186,7 +190,9 @@ def generate_pairs(config):
                 prompts.build_pair_prompt(random_generator, severity)
                 for _ in range(size)
             ]
-            texts = _chat(engine, sampling, system_prompt, user_prompts)
+            texts = _chat(
+                engine, sampling, system_prompt, user_prompts, example_turns
+            )
             attempts += size
             for text in texts:
                 if kept >= target:

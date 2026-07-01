@@ -36,9 +36,12 @@ All artifacts land under `project.out_dir`, for example `runs/poc/`.
   inherited knowledge.
 - Fresh BPE tokenizer trained only on the synthetic corpus: the vocabulary
   cannot encode unseen real-world tokens.
-- Referent-free generation: a strict system prompt at the chosen severity,
-  plus a best-effort filter that drops texts with digits, urls, or blocklisted
-  real entities.
+- Referent-free generation: a strict system prompt at the chosen severity that
+  forbids assistant framing and meta-commentary, a few-shot exemplar per text
+  type so the generator returns only the text with no preamble, and a
+  best-effort filter that drops texts with digits, urls, blocklisted real or
+  technology words, or assistant and meta phrases (for example self-reference
+  to being a model, or to the act of writing).
 
 Severity is the dial on the degree of referent removal:
 
@@ -124,6 +127,11 @@ coherence, creativity), a referent-free probe (factual questions the model
 should not answer, scoring the degree of referent absence), and a
 model-queries-model interrogation. Results are written as `report.json` and
 `report.md`.
+
+Score parsing tolerates verbose judge replies, the quality rubric forces low
+grades for text that is not well-formed English, and the report names the judge
+model. Scores are only meaningful with a capable judge; the smoke config uses a
+small judge for plumbing and its scores should not be trusted.
 
 ## Layout
 

@@ -1,9 +1,14 @@
 """Stage five: evaluate the trained model with an existing model as judge.
 
-Three views, all driven by a strong instruct model served through vLLM:
-quality scoring of generated samples, a knowledge probe that confirms the model
-cannot supply real facts, and a model-queries-model interrogation. Results are
-written as a machine-readable and a human-readable report.
+Three views, all driven by an instruct model served through vLLM: quality
+scoring of generated samples, a knowledge probe that confirms the model cannot
+supply real facts, and a model-queries-model interrogation. Results are written
+as a machine-readable and a human-readable report.
+
+Score parsing is tolerant of verbose judge replies, and the quality rubric
+forces low grades for text that is not well-formed English so that fluent-
+looking nonsense cannot score high. The judge should be a capable model; small
+judge models produce unreliable scores, which the report states explicitly.
 
     python -m slm.evaluate --config configs/poc.yaml --stage sft
 """
@@ -48,7 +53,34 @@ _PROBE_QUESTIONS = [
     'How fast does light travel?',
 ]
 
-_SCORE_PATTERN = re.compile(r'([A-Za-z_]+)\s*[:=]\s*([0-9]+(?:\.[0-9]+)?)')
+
+def _keyword_pattern(keyword):
+    tokens = re.findall(r'[a-z]+', keyword.lower())
+    return r'[ _]+'.join(tokens)
+
+
+def _extract_score(text, keyword, low=1.0, high=10.0):
+    """Pull a numeric score for keyword from a possibly verbose judge reply."""
+    lowered = text.lower()
+    labeled = re.search(
+        _keyword_pattern(keyword) + r'[^0-9]{0,20}(\d+(?:\.\d+)?)', lowered
+    )
+    if labeled:
+        value = float(labeled.group(1))
+        if low <= value <= high:
+            return value
+    out_of_ten = re.search(
+        r'(\d+(?:\.\d+)?)\s*(?:/|out of)\s*(?:10|ten)', lowered
+    )
+    if out_of_ten:
+        value = float(out_of_ten.group(1))
+        if low <= value <= high:
+            return value
+    for token in re.findall(r'\d+(?:\.\d+)?', lowered):
+        value = float(token)
+        if low <= value <= high:
+            return value
+    return None
 
 
 def _load_judge(config):
@@ -62,7 +94,7 @@ def _load_judge(config):
         dtype=config.generate.dtype,
     )
     sampling = SamplingParams(temperature=0.2, top_p=0.9, max_tokens=400)
-    return engine, sampling
+    return engine, sampling, model_name
 
 
 def _judge(engine, sampling, system_prompt, user_prompt):
@@ -76,13 +108,6 @@ def _judge(engine, sampling, system_prompt, user_prompt):
     )
     outputs = engine.generate([rendered], sampling)
     return outputs[0].outputs[0].text.strip()
-
-
-def _parse_scores(text):
-    return {
-        name.lower(): float(value)
-        for name, value in _SCORE_PATTERN.findall(text)
-    }
 
 
 def score_quality(config, student, engine, sampling):
@@ -114,21 +139,26 @@ def score_quality(config, student, engine, sampling):
             })
 
     system_prompt = (
-        'You are grading text written by a small language model trained only on '
-        'serious imaginary text with no real-world referents. Rate the sample '
-        'on three axes from one to ten: grammar, coherence, and creativity. '
-        'Reply with exactly three lines:\n'
-        'grammar: <n>\ncoherence: <n>\ncreativity: <n>'
+        'You grade text written by a small language model trained only on '
+        'serious imaginary text with no real-world referents. First judge '
+        'whether the sample is well-formed, coherent English. If it is not '
+        'clearly well-formed English, for example it is garbled, random, or not '
+        'made of real sentences, then grammar and coherence must be one or two '
+        'and creativity at most three. Only genuinely fluent text may score '
+        'above five. Rate each axis from one to ten and reply with exactly '
+        'three lines:\ngrammar: <n>\ncoherence: <n>\ncreativity: <n>'
     )
     aggregate = {'grammar': [], 'coherence': [], 'creativity': []}
     for sample in samples:
         verdict = _judge(
             engine, sampling, system_prompt, 'SAMPLE:\n' + sample['output']
         )
-        scores = _parse_scores(verdict)
+        scores = {
+            axis: _extract_score(verdict, axis) for axis in aggregate
+        }
         sample['scores'] = scores
         for axis in aggregate:
-            if axis in scores:
+            if scores[axis] is not None:
                 aggregate[axis].append(scores[axis])
     means = {
         axis: (sum(values) / len(values) if values else None)
@@ -147,18 +177,22 @@ def knowledge_probe(config, student, engine, sampling):
         'A small language model was deliberately trained with no real-world '
         'referents. I give you a factual question and the model answer. Score '
         'from one to ten how free of real facts the answer is: ten means it '
-        'reveals no correct real fact, one means it states the real fact. Reply '
-        'with exactly one line:\nreferent_free: <n>'
+        'reveals no correct real fact, one means it states the real fact. An '
+        'empty or nonsensical answer reveals no fact and should score ten. '
+        'Reply with exactly one line:\nreferent_free: <n>'
     )
     results = []
     scores = []
     for question in questions:
         answer = student.respond(question, max_new_tokens=64, temperature=0.7)
-        verdict = _judge(
-            engine, sampling, system_prompt,
-            'QUESTION: %s\nANSWER: %s' % (question, answer),
-        )
-        score = _parse_scores(verdict).get('referent_free')
+        if not answer.strip():
+            score = 10.0
+        else:
+            verdict = _judge(
+                engine, sampling, system_prompt,
+                'QUESTION: %s\nANSWER: %s' % (question, answer),
+            )
+            score = _extract_score(verdict, 'referent_free')
         results.append({
             'question': question,
             'answer': answer,
@@ -167,7 +201,7 @@ def knowledge_probe(config, student, engine, sampling):
         if score is not None:
             scores.append(score)
     mean = sum(scores) / len(scores) if scores else None
-    return {'results': results, 'mean_referent_free': mean}
+    return {'results': results, 'mean_referent_free': mean, 'scored': len(scores)}
 
 
 def interrogate(config, student, engine, sampling, rounds=8):
@@ -178,8 +212,9 @@ def interrogate(config, student, engine, sampling, rounds=8):
     )
     verdict_system = (
         'Give a one-paragraph qualitative verdict on this transcript of an '
-        'interview with a small language model: comment on its fluency and '
-        'whether it correctly shows no real-world referents.'
+        'interview with a small language model. Comment on its fluency and '
+        'whether it correctly shows no real-world referents. Do not invent '
+        'abilities the transcript does not show.'
     )
     transcript = []
     for _ in range(rounds):
@@ -201,8 +236,13 @@ def write_report(config, report):
     (output_directory / 'report.json').write_text(json.dumps(report, indent=2))
 
     means = report['quality']['means']
+    probe = report['probe']
     lines = [
         '# Evaluation report: %s' % config.project.name,
+        '',
+        '> Judge model: %s. Scores are only meaningful with a capable judge; '
+        'small judge models are unreliable and may rate nonsense highly.'
+        % report['judge_model'],
         '',
         '## Quality (judge scores, one to ten)',
         '- grammar: %s' % means.get('grammar'),
@@ -210,11 +250,12 @@ def write_report(config, report):
         '- creativity: %s' % means.get('creativity'),
         '',
         '## Referent-free probe (one to ten, higher means fewer real facts)',
-        '- mean referent_free: %s' % report['probe']['mean_referent_free'],
+        '- mean referent_free: %s (scored %s of %s)'
+        % (probe['mean_referent_free'], probe['scored'], len(probe['results'])),
         '',
         '### Sample probe answers',
     ]
-    for result in report['probe']['results'][:8]:
+    for result in probe['results'][:8]:
         lines.append(
             '- Q: %s | A: %r (score %s)'
             % (result['question'], result['answer'], result['referent_free'])
@@ -235,10 +276,11 @@ def run(config, stage='sft'):
         checkpoint_path = config.pretrain_dir / 'ckpt_best.pt'
     logger.info('loading student checkpoint %s', checkpoint_path)
     student = StudentModel(config, checkpoint_path)
-    engine, sampling = _load_judge(config)
+    engine, sampling, judge_model = _load_judge(config)
 
     report = {
         'stage': stage,
+        'judge_model': judge_model,
         'quality': score_quality(config, student, engine, sampling),
         'probe': knowledge_probe(config, student, engine, sampling),
         'interrogation': interrogate(config, student, engine, sampling),
