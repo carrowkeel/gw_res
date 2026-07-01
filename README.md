@@ -99,6 +99,25 @@ PYTHONPATH=src python -m slm.pipeline --config configs/smoke.yaml \
   --stages tokenizer,data,pretrain,finetune
 ```
 
+## Scaling up: the pilot tier
+
+`configs/pilot.yaml` sits between smoke and poc: the real 7B generator, about
+ten thousand texts, and a 60M model. It is meant to validate 7B generation
+quality and yield, and to get a first real signal that a small model learns
+fluent English, before committing to a poc-scale run. Run generation first,
+inspect the corpus, then train:
+
+```bash
+python slurm/submit.py --config configs/pilot.yaml --stages generate
+PYTHONPATH=src python -m slm.inspect --config configs/pilot.yaml
+python slurm/submit.py --config configs/pilot.yaml \
+  --stages tokenizer,data,pretrain,finetune,evaluate
+```
+
+`slm.inspect` reports per-type counts, generation yield against the target,
+length statistics, and any kept text that still trips the referent-free filter,
+so the "look at the data" step is one command.
+
 ## Multi-GPU pretraining
 
 Set `slurm.pretrain_gres: gpu:l40s:4` (the submitter switches that stage to
