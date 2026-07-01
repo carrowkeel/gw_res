@@ -31,8 +31,21 @@ def _gpu_count(gres):
     return int(match.group(1)) if match else 1
 
 
+def _environment_prefix(config):
+    entries = config.slurm.environment or {}
+    parts = []
+    for key, value in entries.items():
+        value_text = str(value)
+        if '/' in value_text:
+            parts.append("mkdir -p '%s'" % value_text)
+        parts.append("export %s='%s'" % (key, value_text))
+    return (' && '.join(parts) + ' && ') if parts else ''
+
+
 def _stage_command(stage, config, config_path):
-    base = 'cd %s && PYTHONPATH=src' % REPOSITORY_ROOT
+    base = '%scd %s && PYTHONPATH=src' % (
+        _environment_prefix(config), REPOSITORY_ROOT
+    )
     if stage == 'pretrain':
         gres = config.slurm.pretrain_gres or config.slurm.gres
         gpus = _gpu_count(gres)
