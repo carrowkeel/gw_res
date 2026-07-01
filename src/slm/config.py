@@ -140,6 +140,7 @@ class SlurmConfig:
     pretrain_gres: str = None
     log_dir: str = 'runs/poc/slurm_logs'
     extra_sbatch: list = field(default_factory=list)
+    environment: dict = field(default_factory=dict)
 
 
 @dataclass

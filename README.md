@@ -91,6 +91,25 @@ sbatch --job-name slm-generate --mem 64G --cpus-per-task 8 --gres gpu:l40s:1 \
 
 `slurm/example_stage.sbatch` runs a single stage by hand.
 
+### Redirecting caches off the home directory
+
+Batch jobs do not reliably inherit your login-shell environment, so setting
+cache variables before submitting is not enough. Set them in `slurm.environment`
+instead; the submitter exports them (and creates path-valued directories) inside
+each job, independent of cluster propagation policy:
+
+```yaml
+slurm:
+  environment:
+    HF_HOME: /your/lab/hf_cache
+    XDG_CACHE_HOME: /your/lab/cache
+    VLLM_CACHE_ROOT: /your/lab/cache/vllm
+    TRITON_CACHE_DIR: /your/lab/cache/triton
+```
+
+Note that vLLM uses `VLLM_CACHE_ROOT` and does not read `XDG_CACHE_HOME`, so set
+it explicitly to keep vLLM's compiled-kernel cache off the home directory.
+
 ## Run locally
 
 ```bash
