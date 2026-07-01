@@ -16,7 +16,7 @@ import re
 BLOCKLIST = {
     'america', 'england', 'france', 'china', 'africa', 'europe', 'asia',
     'london', 'paris', 'tokyo', 'york', 'russia', 'india', 'germany',
-    'earth', 'mars', 'moon', 'sun',
+    'mars', 'jupiter', 'saturn', 'venus', 'mercury', 'planet',
     'god', 'jesus', 'president', 'king', 'queen', 'einstein', 'napoleon',
     'google', 'apple', 'amazon', 'microsoft', 'facebook', 'twitter',
     'iphone', 'android', 'internet', 'computer', 'phone', 'television', 'car',
@@ -26,6 +26,14 @@ BLOCKLIST = {
     'information', 'software', 'hardware', 'algorithm', 'algorithms',
     'digital', 'online', 'website', 'robot', 'application', 'keyboard',
     'password', 'email',
+    'lens', 'refract', 'refraction', 'convex', 'concave', 'prism', 'magnify',
+    'optics', 'optical', 'wavelength', 'molecule', 'molecular', 'atom',
+    'electron', 'proton', 'neutron', 'chemical', 'geometry', 'geometric',
+    'polygon', 'triangle', 'rectangle', 'hexagon', 'pentagon', 'vertex',
+    'vertices', 'perimeter', 'radius', 'diameter', 'circumference',
+    'perpendicular', 'diagonal', 'degrees', 'equation', 'decimal',
+    'coordinate', 'coordinates', 'velocity', 'acceleration', 'formula',
+    'calculate', 'calculated', 'multiply', 'subtract',
 }
 
 META_PHRASES = [

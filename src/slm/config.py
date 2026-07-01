@@ -33,8 +33,10 @@ class GenerateConfig:
     )
     number_of_texts: int = 100000
     number_of_pairs: int = 20000
-    temperature: float = 0.9
+    temperature: float = 1.0
     top_p: float = 0.95
+    frequency_penalty: float = 0.4
+    presence_penalty: float = 0.0
     max_tokens: int = 512
     tensor_parallel_size: int = 1
     gpu_memory_utilization: float = 0.90

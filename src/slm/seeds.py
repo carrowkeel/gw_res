@@ -17,6 +17,8 @@ GENERIC_ENTITIES = [
     'branch', 'leaf', 'flower', 'seed', 'tree', 'plant', 'reed', 'moss',
     'animal', 'bird', 'fish', 'insect', 'creature', 'nest', 'den', 'track',
     'wind', 'rain', 'mist', 'frost', 'cloud', 'shade', 'light', 'sound',
+    'scarp', 'channel', 'spur', 'basin', 'shelf', 'mound', 'thicket', 'bank',
+    'pool', 'ledge', 'gully', 'bar of sand', 'stand of reeds', 'run of water',
 ]
 
 CATEGORY_ENTITIES = [
@@ -62,6 +64,45 @@ CONVERSATION_SITUATIONS = [
     'describing a place the other has not been to',
     'settling who should do which part of a task',
     'remembering how a place looked before it changed',
+]
+
+TONES = [
+    'plain', 'terse', 'matter-of-fact', 'measured', 'severe', 'dry', 'uneasy',
+    'brisk', 'flat', 'wary',
+]
+
+POINTS_OF_VIEW = [
+    'an unnamed observer', 'the third person throughout',
+    'someone recalling it afterward', 'the second person, addressing the reader',
+]
+
+LENGTH_BANDS = [
+    'a few sentences', 'a short paragraph', 'two short paragraphs',
+    'several short paragraphs',
+]
+
+PROSE_FORMS = [
+    'an account of a change over time',
+    'a set of plain observations',
+    'a comparison of two places',
+    'an explanation of how something comes to be so',
+    'a short account of a single event',
+    'a description of a place fallen into disorder',
+    'a record of what is present and what is missing',
+    'a report of something noticed and then lost again',
+]
+
+RELATION_KINDS = ['spatial', 'comparative', 'ordinal', 'temporal', 'causal']
+
+DIALOGUE_GOALS = [
+    'settle a disagreement about where to place a shared thing',
+    'negotiate who does which part of a shared task',
+    'work through one instructing the other, who keeps objecting',
+    'reconstruct the order in which a set of events happened',
+    'weigh two courses of action under a single hard constraint',
+    'resolve one recounting a change the other does not believe',
+    'apportion a scarce thing between them',
+    'correct each other about how the surroundings are arranged',
 ]
 
 ABSTRACT_SYMBOLS = [

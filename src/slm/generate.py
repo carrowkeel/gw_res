@@ -43,6 +43,8 @@ def _load_engine(model_name, generate_config):
     sampling = SamplingParams(
         temperature=generate_config.temperature,
         top_p=generate_config.top_p,
+        frequency_penalty=generate_config.frequency_penalty,
+        presence_penalty=generate_config.presence_penalty,
         max_tokens=generate_config.max_tokens,
     )
     return engine, sampling
@@ -106,7 +108,6 @@ def _generate_type(engine, sampling, config, text_type, target, writer, seen):
     generate_config = config.generate
     severity = generate_config.severity
     system_prompt = prompts.build_system_prompt(severity)
-    example_turns = prompts.example_turns(text_type)
     random_generator = random.Random(
         config.project.seed + hash(text_type) % 10000
     )
@@ -119,6 +120,7 @@ def _generate_type(engine, sampling, config, text_type, target, writer, seen):
             prompts.build_prompt(text_type, random_generator, severity)
             for _ in range(size)
         ]
+        example_turns = prompts.example_turns(text_type, random_generator)
         texts = _chat(
             engine, sampling, system_prompt, user_prompts, example_turns
         )
