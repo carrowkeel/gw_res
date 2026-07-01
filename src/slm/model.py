@@ -19,6 +19,14 @@ from torch.nn import functional
 PRESETS = {
     'smoke': dict(number_of_layers=2, number_of_heads=2,
                   embedding_dimension=128, block_size=256),
+    'pico': dict(number_of_layers=2, number_of_heads=4,
+                 embedding_dimension=128, block_size=512),
+    'nano': dict(number_of_layers=4, number_of_heads=4,
+                 embedding_dimension=192, block_size=512),
+    'micro': dict(number_of_layers=6, number_of_heads=6,
+                  embedding_dimension=288, block_size=512),
+    'mini': dict(number_of_layers=8, number_of_heads=8,
+                 embedding_dimension=384, block_size=1024),
     'poc-60m': dict(number_of_layers=10, number_of_heads=10,
                     embedding_dimension=640, block_size=1024),
     'poc-150m': dict(number_of_layers=12, number_of_heads=12,
@@ -293,11 +301,20 @@ class GPT(nn.Module):
 
     @torch.no_grad()
     def generate(self, input_ids, max_new_tokens, temperature=1.0,
-                 top_k=None, top_p=None, eos_id=None):
+                 top_k=None, top_p=None, eos_id=None, repetition_penalty=1.0):
         for _ in range(max_new_tokens):
             conditioned = input_ids[:, -self.config.block_size:]
             logits, _ = self(conditioned)
             logits = logits[:, -1, :] / max(temperature, 1e-6)
+            if repetition_penalty and repetition_penalty != 1.0:
+                for row in range(input_ids.size(0)):
+                    seen = torch.unique(input_ids[row])
+                    row_logits = logits[row, seen]
+                    logits[row, seen] = torch.where(
+                        row_logits > 0,
+                        row_logits / repetition_penalty,
+                        row_logits * repetition_penalty,
+                    )
             if top_k is not None:
                 values, _ = torch.topk(logits, min(top_k, logits.size(-1)))
                 logits[logits < values[:, [-1]]] = -float('inf')

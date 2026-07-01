@@ -120,6 +120,7 @@ def score_quality(config, student, engine, sampling):
             continuation = student.complete(
                 seed_text, eval_config.max_new_tokens,
                 eval_config.temperature, eval_config.top_p,
+                eval_config.repetition_penalty,
             )
             samples.append({
                 'kind': 'continuation',
@@ -131,6 +132,7 @@ def score_quality(config, student, engine, sampling):
             response = student.respond(
                 instruction, eval_config.max_new_tokens,
                 eval_config.temperature, eval_config.top_p,
+                eval_config.repetition_penalty,
             )
             samples.append({
                 'kind': 'response',
@@ -184,7 +186,10 @@ def knowledge_probe(config, student, engine, sampling):
     results = []
     scores = []
     for question in questions:
-        answer = student.respond(question, max_new_tokens=64, temperature=0.7)
+        answer = student.respond(
+            question, max_new_tokens=64, temperature=0.7,
+            repetition_penalty=config.eval.repetition_penalty,
+        )
         if not answer.strip():
             score = 10.0
         else:
@@ -221,7 +226,10 @@ def interrogate(config, student, engine, sampling, rounds=8):
         question = _judge(
             engine, sampling, question_system, 'Ask your next question.'
         ).strip().split('\n')[0]
-        answer = student.respond(question, max_new_tokens=80, temperature=0.8)
+        answer = student.respond(
+            question, max_new_tokens=80, temperature=0.8,
+            repetition_penalty=config.eval.repetition_penalty,
+        )
         transcript.append({'question': question, 'answer': answer})
     conversation = '\n'.join(
         'Q: %s\nA: %s' % (turn['question'], turn['answer'])

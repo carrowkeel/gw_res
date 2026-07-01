@@ -98,6 +98,7 @@ class PretrainConfig:
     evaluation_iterations: int = 100
     checkpoint_interval: int = 1000
     validation_fraction: float = 0.005
+    early_stop_patience: int = 0
 
 
 @dataclass
@@ -126,6 +127,7 @@ class EvalConfig:
     max_new_tokens: int = 256
     temperature: float = 0.8
     top_p: float = 0.95
+    repetition_penalty: float = 1.3
     student_gpu_memory_utilization: float = 0.45
     judge_gpu_memory_utilization: float = 0.45
 
