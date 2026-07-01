@@ -1,0 +1,88 @@
+project:
+  name: slm-pilot
+  out_dir: runs/pilot
+  seed: 1337
+
+generate:
+  default_model: Qwen/Qwen2.5-7B-Instruct
+  type_models: {}
+  severity: s1
+  text_type_weights:
+    prose: 1.0
+    conversation: 1.0
+    definition: 1.0
+    description: 1.0
+  number_of_texts: 10000
+  number_of_pairs: 2000
+  temperature: 0.9
+  top_p: 0.95
+  max_tokens: 512
+  tensor_parallel_size: 1
+  gpu_memory_utilization: 0.90
+  max_model_len: 2048
+  dtype: bfloat16
+  batch_size: 512
+  apply_filter: true
+  deduplicate: true
+  minimum_characters: 200
+
+tokenizer:
+  vocabulary_size: 8000
+  minimum_frequency: 2
+
+model:
+  preset: poc-60m
+  block_size: 1024
+  dropout: 0.0
+  tie_embeddings: true
+
+pretrain:
+  batch_size: 32
+  gradient_accumulation_steps: 8
+  maximum_steps: 3000
+  learning_rate: 0.0006
+  minimum_learning_rate: 0.00006
+  warmup_steps: 150
+  weight_decay: 0.1
+  gradient_clip: 1.0
+  dtype: bfloat16
+  compile_model: true
+  log_interval: 20
+  evaluation_interval: 250
+  evaluation_iterations: 50
+  checkpoint_interval: 500
+  validation_fraction: 0.01
+
+finetune:
+  batch_size: 16
+  gradient_accumulation_steps: 4
+  epochs: 3
+  learning_rate: 0.00002
+  minimum_learning_rate: 0.000002
+  warmup_ratio: 0.03
+  dtype: bfloat16
+  compile_model: false
+  maximum_sequence_length: 1024
+  checkpoint_interval: 200
+
+eval:
+  judge_model: null
+  number_of_generation_samples: 50
+  number_of_probe_questions: 50
+  max_new_tokens: 256
+  temperature: 0.8
+  top_p: 0.95
+  student_gpu_memory_utilization: 0.45
+  judge_gpu_memory_utilization: 0.45
+
+slurm:
+  enabled: true
+  partition: null
+  account: null
+  gres: gpu:l40s:1
+  memory: 64G
+  cpus_per_task: 8
+  time_limit: "08:00:00"
+  pretrain_gres: null
+  log_dir: runs/pilot/slurm_logs
+  extra_sbatch: []
