@@ -35,6 +35,24 @@ def _mean_length(values):
     return sum(values) // len(values) if values else 0
 
 
+def _diversity(texts):
+    """Return exact-duplicate rate and distinct unigram and bigram ratios."""
+    if not texts:
+        return {'duplicate_rate': 0.0, 'distinct_1': 0.0, 'distinct_2': 0.0}
+    normalized = [' '.join(text.split()).lower() for text in texts]
+    duplicate_rate = 1.0 - len(set(normalized)) / len(normalized)
+    unigrams = []
+    bigrams = []
+    for text in normalized:
+        words = text.split()
+        unigrams.extend(words)
+        bigrams.extend(zip(words, words[1:]))
+    distinct_1 = len(set(unigrams)) / len(unigrams) if unigrams else 0.0
+    distinct_2 = len(set(bigrams)) / len(bigrams) if bigrams else 0.0
+    return {'duplicate_rate': duplicate_rate,
+            'distinct_1': distinct_1, 'distinct_2': distinct_2}
+
+
 def inspect(config):
     """Print a summary of the generated corpus and return the counts."""
     severity = config.generate.severity
@@ -59,6 +77,14 @@ def inspect(config):
     if lengths:
         print('char length: min %d mean %d max %d'
               % (min(lengths), _mean_length(lengths), max(lengths)))
+    diversity = _diversity([document['text'] for document in documents])
+    print('diversity: duplicate_rate %.3f distinct_1 %.3f distinct_2 %.3f'
+          % (diversity['duplicate_rate'], diversity['distinct_1'],
+             diversity['distinct_2']))
+    print('per-type diversity (distinct_2):')
+    for text_type in sorted(type_counts):
+        subset = [d['text'] for d in documents if d.get('type') == text_type]
+        print('  %-14s %.3f' % (text_type, _diversity(subset)['distinct_2']))
     print('filter-tripping kept documents: %d' % len(flagged))
     for text_type, reasons, text in flagged[:5]:
         print('  [%s] %s' % (text_type, ', '.join(reasons)))

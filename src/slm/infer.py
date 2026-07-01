@@ -22,7 +22,8 @@ class StudentModel:
         self.model.load_state_dict(saved['model'])
         self.block_size = gpt_config.block_size
 
-    def complete(self, text, max_new_tokens=256, temperature=0.8, top_p=0.95):
+    def complete(self, text, max_new_tokens=256, temperature=0.8, top_p=0.95,
+                 repetition_penalty=1.0):
         """Continue raw text in the pretraining style."""
         import torch
 
@@ -32,13 +33,13 @@ class StudentModel:
         )
         output = self.model.generate(
             input_ids, max_new_tokens, temperature=temperature, top_p=top_p,
-            eos_id=self.tokenizer.eos_id,
+            eos_id=self.tokenizer.eos_id, repetition_penalty=repetition_penalty,
         )
         generated = output[0, len(token_ids):].tolist()
         return self.tokenizer.decode(generated)
 
     def respond(self, instruction, max_new_tokens=256, temperature=0.8,
-                top_p=0.95):
+                top_p=0.95, repetition_penalty=1.0):
         """Produce a chat-style response using the finetuning framing."""
         import torch
 
@@ -52,7 +53,7 @@ class StudentModel:
         )
         output = self.model.generate(
             input_ids, max_new_tokens, temperature=temperature, top_p=top_p,
-            eos_id=self.tokenizer.eos_id,
+            eos_id=self.tokenizer.eos_id, repetition_penalty=repetition_penalty,
         )
         generated = output[0, len(token_ids):].tolist()
         return self.tokenizer.decode(generated)

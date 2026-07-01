@@ -21,8 +21,8 @@ import numpy
 from .config import load_config, to_dict
 from .model import GPT, build_config
 from .utils import (
-    ensure_directory, get_local_rank, get_logger, is_distributed,
-    is_main_process, set_seed,
+    ensure_directory, get_local_rank, get_logger, get_world_size,
+    is_distributed, is_main_process, set_seed,
 )
 
 logger = get_logger('pretrain')
@@ -75,9 +75,17 @@ def run(config):
     gpt_config = build_config(config.model, vocabulary_size)
     model = GPT(gpt_config).to(device)
     if is_main_process():
+        non_embedding = model.count_parameters(non_embedding=True)
+        train_tokens = meta.get('train_tokens', 0)
+        ratio = train_tokens / non_embedding if non_embedding else 0.0
         logger.info(
-            'model: %.1fM parameters (preset %s)',
-            model.count_parameters() / 1e6, config.model.preset,
+            'model: %.2fM parameters (%.2fM non-embedding, preset %s)',
+            model.count_parameters() / 1e6, non_embedding / 1e6,
+            config.model.preset,
+        )
+        logger.info(
+            'train tokens %d, tokens per non-embedding parameter %.1f',
+            train_tokens, ratio,
         )
 
     precision = {
@@ -120,6 +128,7 @@ def run(config):
     checkpoint_directory = ensure_directory(config.pretrain_dir)
     start_step = 0
     best_validation = float('inf')
+    evaluations_since_best = 0
     last_checkpoint = checkpoint_directory / 'ckpt_last.pt'
     if last_checkpoint.exists():
         saved = torch.load(last_checkpoint, map_location=device)
@@ -201,14 +210,33 @@ def run(config):
 
         if step > 0 and step % pretrain_config.evaluation_interval == 0:
             validation_loss = estimate_validation_loss()
+            if is_distributed():
+                import torch.distributed as distributed
+
+                gathered = torch.tensor(validation_loss, device=device)
+                distributed.all_reduce(gathered, op=distributed.ReduceOp.SUM)
+                validation_loss = gathered.item() / get_world_size()
+            if validation_loss < best_validation - 1e-4:
+                best_validation = validation_loss
+                evaluations_since_best = 0
+                save_checkpoint(step, validation_loss, 'ckpt_best')
+            else:
+                evaluations_since_best += 1
             if is_main_process():
                 logger.info(
-                    'step %d  validation_loss %.4f  perplexity %.2f',
+                    'step %d  validation_loss %.4f  perplexity %.2f  '
+                    '(no improvement for %d)',
                     step, validation_loss, math.exp(min(validation_loss, 20)),
+                    evaluations_since_best,
                 )
-                if validation_loss < best_validation:
-                    best_validation = validation_loss
-                    save_checkpoint(step, validation_loss, 'ckpt_best')
+            if (pretrain_config.early_stop_patience
+                    and evaluations_since_best
+                    >= pretrain_config.early_stop_patience):
+                if is_main_process():
+                    logger.info(
+                        'early stopping at step %d, validation rising', step
+                    )
+                break
         if step > 0 and step % pretrain_config.checkpoint_interval == 0:
             save_checkpoint(step, best_validation, 'ckpt_last')
 
