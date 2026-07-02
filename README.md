@@ -213,6 +213,15 @@ grades for text that is not well-formed English, and the report names the judge
 model. Scores are only meaningful with a capable judge; the smoke config uses a
 small judge for plumbing and its scores should not be trusted.
 
+The report judges the finetuned model on chat prompts, which is the harshest
+view of a small model. To see what pretraining actually learned, use
+`slm.sample`, which completes in-distribution seeds with the base pretrained
+model and no repetition penalty:
+
+```bash
+python -m slm.sample --config configs/scale/s1_nano.yaml
+```
+
 ## Layout
 
 ```
