@@ -88,5 +88,4 @@ slurm:
   time_limit: "12:00:00"
   pretrain_gres: null
   log_dir: runs/scale/pico/slurm_logs
-  environment: {}
   extra_sbatch: []
