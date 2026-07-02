@@ -10,6 +10,7 @@ come from the slurm section of the config.
 """
 
 import argparse
+import os
 import re
 import subprocess
 import sys
@@ -23,6 +24,12 @@ from slm.config import load_config
 ALL_STAGES = ['generate', 'tokenizer', 'data', 'pretrain', 'finetune', 'evaluate']
 GPU_STAGES = {'generate', 'pretrain', 'finetune', 'evaluate'}
 
+CACHE_VARIABLES = [
+    'HF_HOME', 'HF_HUB_CACHE', 'HUGGINGFACE_HUB_CACHE', 'TRANSFORMERS_CACHE',
+    'HF_DATASETS_CACHE', 'XDG_CACHE_HOME', 'VLLM_CACHE_ROOT', 'TRITON_CACHE_DIR',
+    'TORCH_HOME', 'TORCHINDUCTOR_CACHE_DIR', 'TORCH_EXTENSIONS_DIR',
+]
+
 
 def _gpu_count(gres):
     if not gres:
@@ -31,10 +38,38 @@ def _gpu_count(gres):
     return int(match.group(1)) if match else 1
 
 
+def _derived_cache_environment(cache_dir):
+    return {
+        'HF_HOME': os.path.join(cache_dir, 'huggingface'),
+        'XDG_CACHE_HOME': os.path.join(cache_dir, 'xdg'),
+        'VLLM_CACHE_ROOT': os.path.join(cache_dir, 'vllm'),
+        'TRITON_CACHE_DIR': os.path.join(cache_dir, 'triton'),
+    }
+
+
+def effective_environment(config):
+    """Resolve the environment exported into every job.
+
+    Precedence, lowest to highest: cache directories derived from a single root
+    (slurm.cache_dir or the SLM_CACHE_DIR variable), then any cache variables
+    already set in the submitting shell, then the explicit slurm.environment
+    map. This lets caches be redirected once and reused across all configs.
+    """
+    environment = {}
+    cache_dir = config.slurm.cache_dir or os.environ.get('SLM_CACHE_DIR')
+    if cache_dir:
+        environment.update(_derived_cache_environment(cache_dir))
+    for name in CACHE_VARIABLES:
+        value = os.environ.get(name)
+        if value:
+            environment[name] = value
+    environment.update(config.slurm.environment or {})
+    return environment
+
+
 def _environment_prefix(config):
-    entries = config.slurm.environment or {}
     parts = []
-    for key, value in entries.items():
+    for key, value in effective_environment(config).items():
         value_text = str(value)
         if '/' in value_text:
             parts.append("mkdir -p '%s'" % value_text)
