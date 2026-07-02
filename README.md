@@ -137,6 +137,32 @@ python slurm/submit.py --config configs/pilot.yaml \
 length statistics, and any kept text that still trips the referent-free filter,
 so the "look at the data" step is one command.
 
+## Scaling ladder
+
+`configs/scale/` holds a ladder of self-contained runs that grow the model and
+the corpus together at a roughly twenty-tokens-per-parameter ratio, so the model
+is neither starved nor oversized at any rung. Run them in order and compare the
+pretrain validation loss and the evaluation report at each step.
+
+| Config | preset | non-embed params | texts | approx tokens | ratio |
+|--------|--------|------------------|-------|---------------|-------|
+| `s0_pico.yaml` | pico | 0.43M | 75k | ~9M | ~20:1 |
+| `s1_nano.yaml` | nano | 1.8M | 300k | ~35M | ~20:1 |
+| `s2_micro.yaml` | micro | 6.0M | 1M | ~120M | ~20:1 |
+
+Each rung generates its own corpus, so generation cost grows with the rung
+(`micro` is a large generation run; raise `generate.tensor_parallel_size` or
+generate across several GPUs to speed it up, and use `slurm.pretrain_gres` for
+multi-GPU pretraining at the higher rungs). The pretrain log prints
+`tokens per non-embedding parameter` so the ratio is visible per run.
+
+```bash
+python slurm/submit.py --config configs/scale/s0_pico.yaml --stages generate
+python -m slm.inspect --config configs/scale/s0_pico.yaml
+python slurm/submit.py --config configs/scale/s0_pico.yaml \
+  --stages tokenizer,data,pretrain,finetune,evaluate
+```
+
 ## Multi-GPU pretraining
 
 Set `slurm.pretrain_gres: gpu:l40s:4` (the submitter switches that stage to
