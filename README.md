@@ -93,22 +93,38 @@ sbatch --job-name slm-generate --mem 64G --cpus-per-task 8 --gres gpu:l40s:1 \
 
 ### Redirecting caches off the home directory
 
-Batch jobs do not reliably inherit your login-shell environment, so setting
-cache variables before submitting is not enough. Set them in `slurm.environment`
-instead; the submitter exports them (and creates path-valued directories) inside
-each job, independent of cluster propagation policy:
+Batch jobs do not reliably inherit your login-shell environment, so exporting
+cache variables before submitting is not enough. The submitter exports the
+cache variables (and creates their directories) inside each job, independent of
+cluster propagation policy. Set the cache location once, in any of three ways
+(later ones override earlier ones):
 
-```yaml
-slurm:
-  environment:
-    HF_HOME: /your/lab/hf_cache
-    XDG_CACHE_HOME: /your/lab/cache
-    VLLM_CACHE_ROOT: /your/lab/cache/vllm
-    TRITON_CACHE_DIR: /your/lab/cache/triton
-```
+1. Set a single root once and forget it, with no per-config edits:
 
-Note that vLLM uses `VLLM_CACHE_ROOT` and does not read `XDG_CACHE_HOME`, so set
-it explicitly to keep vLLM's compiled-kernel cache off the home directory.
+   ```bash
+   export SLM_CACHE_DIR=/your/lab/slm_cache   # put this in your shell profile
+   ```
+
+   The submitter derives `HF_HOME`, `XDG_CACHE_HOME`, `VLLM_CACHE_ROOT`, and
+   `TRITON_CACHE_DIR` under that root for every run. The same works per config
+   via `slurm.cache_dir: /your/lab/slm_cache`.
+
+2. Any of the known cache variables already exported in your submitting shell
+   (`HF_HOME`, `VLLM_CACHE_ROOT`, `TRITON_CACHE_DIR`, `XDG_CACHE_HOME`, and the
+   other HuggingFace and torch cache variables) are forwarded into the jobs.
+
+3. Full control per config via an explicit map:
+
+   ```yaml
+   slurm:
+     environment:
+       HF_HOME: /your/lab/hf_cache
+       VLLM_CACHE_ROOT: /your/lab/cache/vllm
+   ```
+
+Note that vLLM uses `VLLM_CACHE_ROOT` and does not read `XDG_CACHE_HOME`, so it
+must be set explicitly (the single-root option above does this for you). Confirm
+what a job will export with `python slurm/submit.py --config <cfg> --dry-run`.
 
 ## Run locally
 

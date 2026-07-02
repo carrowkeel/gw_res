@@ -88,5 +88,4 @@ slurm:
   time_limit: "24:00:00"
   pretrain_gres: null
   log_dir: runs/scale/nano/slurm_logs
-  environment: {}
   extra_sbatch: []
