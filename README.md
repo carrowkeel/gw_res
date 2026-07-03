@@ -25,10 +25,17 @@ types, and the deferred experiments) lives in the intent graph at
 | tokenizer | `slm.tokenizer` | no | `tokenizer/tokenizer.json` |
 | data | `slm.data` | no | `data/packed/{train,val}.bin`, `meta.json` |
 | pretrain | `slm.pretrain` | yes | `checkpoints/pretrain/ckpt_{best,last}.pt` |
-| finetune | `slm.finetune` | yes | `checkpoints/sft/ckpt_last.pt` |
 | evaluate | `slm.evaluate` | yes (vLLM) | `eval/report.{json,md}` |
 
 All artifacts land under `project.out_dir`, for example `runs/poc/`.
+
+Instruction following is learned during pretraining rather than in a separate
+stage. The generated prompt and response pairs are rendered in a light,
+pretraining-adjacent format (`Question: ... Answer: ...`) and mixed into the
+pretraining corpus at `pretrain.instruction_fraction` of the tokens. A separate
+`slm.finetune` stage with role control tokens still exists for later, more
+traditional supervised finetuning, but it is not in the default pipeline;
+request it explicitly with `--stages ...,finetune,...`.
 
 ## Referent-free design
 
@@ -202,21 +209,24 @@ torchrun --standalone --nproc_per_node=4 -m slm.pretrain --config configs/poc.ya
 
 ## Evaluation
 
-An existing model judges the student three ways: quality scoring (grammar,
-coherence, creativity), a referent-free probe (factual questions the model
-should not answer, scoring the degree of referent absence), and a
-model-queries-model interrogation. Results are written as `report.json` and
-`report.md`.
+Evaluation runs on the base pretrained model, which is the product at this
+scale. An existing model judges it two primary ways: completions from
+in-distribution seeds, scored for grammar, coherence, and how free they are of
+real-world referents; and in-world instructions, scored for coherence and for
+whether the answer follows the request. A small real-world knowledge probe is
+kept but demoted, because a tiny model answers such out-of-distribution
+questions poorly and those scores are unreliable. Results are written as
+`report.json` and `report.md`.
 
-Score parsing tolerates verbose judge replies, the quality rubric forces low
+Score parsing tolerates verbose judge replies, the completion rubric forces low
 grades for text that is not well-formed English, and the report names the judge
 model. Scores are only meaningful with a capable judge; the smoke config uses a
-small judge for plumbing and its scores should not be trusted.
+small judge for plumbing and its scores should not be trusted. The repetition
+penalty defaults off and is windowed to recent tokens when used, so it cannot
+suppress the whole vocabulary of a small byte-level model.
 
-The report judges the finetuned model on chat prompts, which is the harshest
-view of a small model. To see what pretraining actually learned, use
-`slm.sample`, which completes in-distribution seeds with the base pretrained
-model and no repetition penalty:
+To read raw completions directly, use `slm.sample`, which completes
+in-distribution seeds with the base pretrained model:
 
 ```bash
 python -m slm.sample --config configs/scale/s1_nano.yaml

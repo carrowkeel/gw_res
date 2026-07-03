@@ -1,8 +1,10 @@
 """Stage two: pack the corpus and provide datasets for training.
 
 Pretraining documents are tokenized, wrapped with sequence-boundary tokens, and
-packed into flat binary token arrays for fast random-window sampling. Finetuning
-pairs are rendered with role control tokens and a response-only loss mask.
+packed into flat binary token arrays for fast random-window sampling. Instruction
+and response pairs are rendered in a light, pretraining-adjacent format and mixed
+into the same corpus at a target token fraction, so the model learns to follow
+instructions during pretraining rather than in a separate, collapse-prone stage.
 
     python -m slm.data --config configs/poc.yaml
 """
@@ -18,13 +20,65 @@ from .utils import ensure_directory, get_logger
 
 logger = get_logger('data')
 
+INSTRUCTION_TEMPLATE = 'Question: %s\nAnswer: %s'
+INSTRUCTION_PREFIX = 'Question: %s\nAnswer:'
+
+
+def render_instruction(prompt, response):
+    """Render one instruction pair as light pretraining-adjacent text."""
+    return INSTRUCTION_TEMPLATE % (prompt.strip(), response.strip())
+
+
+def iterate_pairs(config):
+    """Yield (prompt, response) tuples from the generated pairs file."""
+    path = config.data_dir / 'sft' / 'sft.jsonl'
+    if not path.exists():
+        return
+    with open(path) as handle:
+        for line in handle:
+            stripped = line.strip()
+            if stripped:
+                record = json.loads(stripped)
+                yield record['prompt'], record['response']
+
 
 def _dtype_for_vocabulary(vocabulary_size):
     return numpy.uint16 if vocabulary_size < 2**16 else numpy.uint32
 
 
+def _wrap(tokenizer, text, dtype):
+    token_ids = [tokenizer.bos_id] + tokenizer.encode(text) + [tokenizer.eos_id]
+    return numpy.array(token_ids, dtype=dtype)
+
+
+def _mix_instructions(pretrain_documents, instruction_documents, fraction,
+                      random_generator):
+    """Sample instruction documents to a target fraction of total tokens.
+
+    Upsamples by cycling when there are too few pairs, and downsamples by using
+    a subset when there are too many, so the instruction share of the packed
+    corpus matches the requested fraction from either side.
+    """
+    if not instruction_documents or fraction <= 0.0:
+        return pretrain_documents, 0
+    pretrain_tokens = sum(len(document) for document in pretrain_documents)
+    desired = int(fraction / (1.0 - fraction) * pretrain_tokens)
+    if desired <= 0:
+        return pretrain_documents, 0
+    order = random_generator.permutation(len(instruction_documents))
+    mixed = []
+    accumulated = 0
+    position = 0
+    while accumulated < desired:
+        document = instruction_documents[order[position % len(order)]]
+        mixed.append(document)
+        accumulated += len(document)
+        position += 1
+    return pretrain_documents + mixed, accumulated
+
+
 def prepare_pretrain(config):
-    """Tokenize the corpus and write packed train and validation binaries."""
+    """Tokenize the corpus, mix in instructions, and write packed binaries."""
     tokenizer = SyntheticTokenizer(config.tokenizer_path)
     dtype = _dtype_for_vocabulary(tokenizer.vocabulary_size)
     pretrain_directory = config.data_dir / 'pretrain'
@@ -42,13 +96,24 @@ def prepare_pretrain(config):
                 if not stripped:
                     continue
                 text = json.loads(stripped)['text']
-                token_ids = [tokenizer.bos_id] + tokenizer.encode(text) + [
-                    tokenizer.eos_id
-                ]
-                documents.append(numpy.array(token_ids, dtype=dtype))
-    logger.info('tokenized %d documents', len(documents))
+                documents.append(_wrap(tokenizer, text, dtype))
+    logger.info('tokenized %d pretraining documents', len(documents))
 
+    instruction_documents = [
+        _wrap(tokenizer, render_instruction(prompt, response), dtype)
+        for prompt, response in iterate_pairs(config)
+    ]
     random_generator = numpy.random.default_rng(config.project.seed)
+    documents, instruction_tokens = _mix_instructions(
+        documents, instruction_documents,
+        config.pretrain.instruction_fraction, random_generator,
+    )
+    if instruction_documents:
+        logger.info(
+            'mixed instructions: %d pairs upsampled to %d tokens',
+            len(instruction_documents), instruction_tokens,
+        )
+
     random_generator.shuffle(documents)
     validation_size = max(
         1, int(len(documents) * config.pretrain.validation_fraction)
@@ -71,12 +136,16 @@ def prepare_pretrain(config):
     train_tokens = write_split('train', train_documents)
     validation_tokens = write_split('val', validation_documents)
 
+    total = train_tokens + validation_tokens
     meta = {
         'vocabulary_size': tokenizer.vocabulary_size,
         'dtype': numpy.dtype(dtype).name,
         'train_tokens': train_tokens,
         'validation_tokens': validation_tokens,
         'number_of_documents': len(documents),
+        'instruction_token_fraction': (
+            round(instruction_tokens / total, 4) if total else 0.0
+        ),
     }
     with open(output_directory / 'meta.json', 'w') as handle:
         json.dump(meta, handle, indent=2)

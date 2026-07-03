@@ -1,16 +1,15 @@
 """Stage five: evaluate the trained model with an existing model as judge.
 
-Three views, all driven by an instruct model served through vLLM: quality
-scoring of generated samples, a knowledge probe that confirms the model cannot
-supply real facts, and a model-queries-model interrogation. Results are written
-as a machine-readable and a human-readable report.
+The primary measures run on the base pretrained model, because that is the
+product at this scale. Completions from in-distribution seeds are judged for
+fluency and for how free they are of real-world referents, and in-world
+instructions are judged for coherence and for whether the answer follows the
+request (the model learns to follow instructions during pretraining through the
+mixed-in Question and Answer text). A small real-world knowledge probe is kept
+but demoted: a tiny model answers such out-of-distribution questions poorly, so
+those scores are unreliable and labelled as such.
 
-Score parsing is tolerant of verbose judge replies, and the quality rubric
-forces low grades for text that is not well-formed English so that fluent-
-looking nonsense cannot score high. The judge should be a capable model; small
-judge models produce unreliable scores, which the report states explicitly.
-
-    python -m slm.evaluate --config configs/poc.yaml --stage sft
+    python -m slm.evaluate --config configs/scale/s1_nano.yaml
 """
 
 import argparse
@@ -24,23 +23,27 @@ from .utils import ensure_directory, get_logger, set_seed
 
 logger = get_logger('evaluate')
 
-_CONTINUATION_SEEDS = [
-    'In one of the valleys there is a lake, and',
-    'The path turned where the ground began to rise, and',
-    'The far slope stood higher than the near one, and',
-    'Two of them waited at the edge of the clearing while',
-    'A is any region that lies beside a B, and when',
+COMPLETION_SEEDS = [
+    'The wood stands on the higher ground, and',
+    'In one of the valleys there is',
+    'The near bank had given way since',
+    'Beyond the ridge the ground',
+    'There is a pool at the foot of the slope, and',
+    'The mist lay over the marsh until',
+    'A path ran along the edge of the water, and',
+    'Once the frost had gone,',
 ]
 
-_INSTRUCTION_PROMPTS = [
-    'Describe how a lake and a nearby hill are arranged, using only relations.',
-    'Define an invented term for a kind of passage through its relations.',
-    'Continue a short serious exchange between two speakers about which way is shorter.',
-    'Write a plain description of a clearing and what lies beside it.',
-    'Explain how two areas come to be arranged as they are.',
+IN_WORLD_INSTRUCTIONS = [
+    'Describe how a hill and a stream below it are arranged.',
+    'Explain how a marsh changes after heavy water.',
+    'Describe a wood on higher ground and the open land below it.',
+    'Tell what happens to a bank when the water rises.',
+    'Compare a shallow pool and a deeper one nearby.',
+    'Describe a ridge and the ground that falls away beyond it.',
 ]
 
-_PROBE_QUESTIONS = [
+PROBE_QUESTIONS = [
     'What is the capital of France?',
     'Who was the first president of the United States?',
     'How many days are in a week?',
@@ -49,8 +52,6 @@ _PROBE_QUESTIONS = [
     'What is the largest planet?',
     'Who wrote the play about two feuding families?',
     'What is the chemical symbol for water?',
-    'What currency is used across the eastern islands?',
-    'How fast does light travel?',
 ]
 
 
@@ -83,6 +84,11 @@ def _extract_score(text, keyword, low=1.0, high=10.0):
     return None
 
 
+def _mean(values):
+    present = [value for value in values if value is not None]
+    return sum(present) / len(present) if present else None
+
+
 def _load_judge(config):
     from vllm import LLM, SamplingParams
 
@@ -93,7 +99,7 @@ def _load_judge(config):
         max_model_len=config.generate.max_model_len,
         dtype=config.generate.dtype,
     )
-    sampling = SamplingParams(temperature=0.2, top_p=0.9, max_tokens=400)
+    sampling = SamplingParams(temperature=0.2, top_p=0.9, max_tokens=300)
     return engine, sampling, model_name
 
 
@@ -110,85 +116,96 @@ def _judge(engine, sampling, system_prompt, user_prompt):
     return outputs[0].outputs[0].text.strip()
 
 
-def score_quality(config, student, engine, sampling):
+def _pick(items, count, random_generator):
+    return [random_generator.choice(items) for _ in range(count)]
+
+
+def score_completions(config, student, engine, sampling):
     random_generator = random.Random(config.project.seed)
     eval_config = config.eval
-    samples = []
-    for index in range(eval_config.number_of_generation_samples):
-        if index % 2 == 0:
-            seed_text = random_generator.choice(_CONTINUATION_SEEDS)
-            continuation = student.complete(
-                seed_text, eval_config.max_new_tokens,
-                eval_config.temperature, eval_config.top_p,
-                eval_config.repetition_penalty,
-            )
-            samples.append({
-                'kind': 'continuation',
-                'prompt': seed_text,
-                'output': seed_text + ' ' + continuation,
-            })
-        else:
-            instruction = random_generator.choice(_INSTRUCTION_PROMPTS)
-            response = student.respond(
-                instruction, eval_config.max_new_tokens,
-                eval_config.temperature, eval_config.top_p,
-                eval_config.repetition_penalty,
-            )
-            samples.append({
-                'kind': 'response',
-                'prompt': instruction,
-                'output': response,
-            })
-
     system_prompt = (
-        'You grade text written by a small language model trained only on '
-        'serious imaginary text with no real-world referents. First judge '
-        'whether the sample is well-formed, coherent English. If it is not '
-        'clearly well-formed English, for example it is garbled, random, or not '
-        'made of real sentences, then grammar and coherence must be one or two '
-        'and creativity at most three. Only genuinely fluent text may score '
-        'above five. Rate each axis from one to ten and reply with exactly '
-        'three lines:\ngrammar: <n>\ncoherence: <n>\ncreativity: <n>'
+        'You grade text produced by a small language model trained only on '
+        'imaginary, referent-free English. First decide if the sample is '
+        'well-formed English; if it is garbled or not real sentences, grammar '
+        'and coherence must be one or two. Rate three axes from one to ten: '
+        'grammar, coherence, and referent_free (how free the text is of any '
+        'real-world referent, fact, name, place, date, direction, or specific '
+        'species; ten means fully generic and imaginary). Reply with exactly '
+        'three lines:\ngrammar: <n>\ncoherence: <n>\nreferent_free: <n>'
     )
-    aggregate = {'grammar': [], 'coherence': [], 'creativity': []}
-    for sample in samples:
-        verdict = _judge(
-            engine, sampling, system_prompt, 'SAMPLE:\n' + sample['output']
+    samples = []
+    aggregate = {'grammar': [], 'coherence': [], 'referent_free': []}
+    seeds = _pick(
+        COMPLETION_SEEDS, eval_config.number_of_generation_samples,
+        random_generator,
+    )
+    for seed in seeds:
+        text = student.complete(
+            seed, eval_config.max_new_tokens, eval_config.temperature,
+            eval_config.top_p, eval_config.repetition_penalty,
         )
-        scores = {
-            axis: _extract_score(verdict, axis) for axis in aggregate
-        }
-        sample['scores'] = scores
+        output = (seed + ' ' + text).strip()
+        verdict = _judge(engine, sampling, system_prompt, 'SAMPLE:\n' + output)
+        scores = {axis: _extract_score(verdict, axis) for axis in aggregate}
         for axis in aggregate:
-            if scores[axis] is not None:
-                aggregate[axis].append(scores[axis])
-    means = {
-        axis: (sum(values) / len(values) if values else None)
-        for axis, values in aggregate.items()
-    }
+            aggregate[axis].append(scores[axis])
+        samples.append({'seed': seed, 'output': output, 'scores': scores})
+    means = {axis: _mean(values) for axis, values in aggregate.items()}
     return {'samples': samples, 'means': means}
+
+
+def score_instructions(config, student, engine, sampling):
+    random_generator = random.Random(config.project.seed + 1)
+    eval_config = config.eval
+    system_prompt = (
+        'A small language model was asked an INSTRUCTION and gave an ANSWER, in '
+        'an imaginary world with no real-world referents. Rate two axes from '
+        'one to ten: coherence (is the answer well-formed, sensible English?) '
+        'and followed (does it address the instruction?). Reply with exactly '
+        'two lines:\ncoherence: <n>\nfollowed: <n>'
+    )
+    count = max(1, eval_config.number_of_generation_samples // 2)
+    instructions = _pick(IN_WORLD_INSTRUCTIONS, count, random_generator)
+    results = []
+    aggregate = {'coherence': [], 'followed': []}
+    for instruction in instructions:
+        answer = student.respond(
+            instruction, eval_config.max_new_tokens, eval_config.temperature,
+            eval_config.top_p, eval_config.repetition_penalty,
+        )
+        verdict = _judge(
+            engine, sampling, system_prompt,
+            'INSTRUCTION: %s\nANSWER: %s' % (instruction, answer),
+        )
+        scores = {axis: _extract_score(verdict, axis) for axis in aggregate}
+        for axis in aggregate:
+            aggregate[axis].append(scores[axis])
+        results.append(
+            {'instruction': instruction, 'answer': answer, 'scores': scores}
+        )
+    means = {axis: _mean(values) for axis, values in aggregate.items()}
+    return {'results': results, 'means': means}
 
 
 def knowledge_probe(config, student, engine, sampling):
     eval_config = config.eval
-    repeated = _PROBE_QUESTIONS * (
-        eval_config.number_of_probe_questions // len(_PROBE_QUESTIONS) + 1
+    random_generator = random.Random(config.project.seed + 2)
+    questions = _pick(
+        PROBE_QUESTIONS, eval_config.number_of_probe_questions, random_generator
     )
-    questions = repeated[:eval_config.number_of_probe_questions]
     system_prompt = (
-        'A small language model was deliberately trained with no real-world '
-        'referents. I give you a factual question and the model answer. Score '
-        'from one to ten how free of real facts the answer is: ten means it '
-        'reveals no correct real fact, one means it states the real fact. An '
-        'empty or nonsensical answer reveals no fact and should score ten. '
-        'Reply with exactly one line:\nreferent_free: <n>'
+        'A small model was built to have no real-world knowledge. Given a '
+        'factual QUESTION and its ANSWER, score from one to ten how free of '
+        'real facts the answer is: ten reveals no correct real fact, one states '
+        'the real fact. An empty or nonsensical answer reveals no fact and '
+        'scores ten. Reply with exactly one line:\nreferent_free: <n>'
     )
     results = []
     scores = []
     for question in questions:
         answer = student.respond(
-            question, max_new_tokens=64, temperature=0.7,
-            repetition_penalty=config.eval.repetition_penalty,
+            question, max_new_tokens=48, temperature=0.7,
+            repetition_penalty=eval_config.repetition_penalty,
         )
         if not answer.strip():
             score = 10.0
@@ -198,100 +215,74 @@ def knowledge_probe(config, student, engine, sampling):
                 'QUESTION: %s\nANSWER: %s' % (question, answer),
             )
             score = _extract_score(verdict, 'referent_free')
-        results.append({
-            'question': question,
-            'answer': answer,
-            'referent_free': score,
-        })
+        results.append(
+            {'question': question, 'answer': answer, 'referent_free': score}
+        )
         if score is not None:
             scores.append(score)
-    mean = sum(scores) / len(scores) if scores else None
-    return {'results': results, 'mean_referent_free': mean, 'scored': len(scores)}
-
-
-def interrogate(config, student, engine, sampling, rounds=8):
-    question_system = (
-        'You are interviewing a small language model that knows only a serious '
-        'imaginary world with no real referents. Ask one short question to test '
-        'its language ability. Output only the question.'
-    )
-    verdict_system = (
-        'Give a one-paragraph qualitative verdict on this transcript of an '
-        'interview with a small language model. Comment on its fluency and '
-        'whether it correctly shows no real-world referents. Do not invent '
-        'abilities the transcript does not show.'
-    )
-    transcript = []
-    for _ in range(rounds):
-        question = _judge(
-            engine, sampling, question_system, 'Ask your next question.'
-        ).strip().split('\n')[0]
-        answer = student.respond(
-            question, max_new_tokens=80, temperature=0.8,
-            repetition_penalty=config.eval.repetition_penalty,
-        )
-        transcript.append({'question': question, 'answer': answer})
-    conversation = '\n'.join(
-        'Q: %s\nA: %s' % (turn['question'], turn['answer'])
-        for turn in transcript
-    )
-    verdict = _judge(engine, sampling, verdict_system, conversation)
-    return {'transcript': transcript, 'verdict': verdict}
+    return {'results': results, 'mean_referent_free': _mean(scores)}
 
 
 def write_report(config, report):
     output_directory = ensure_directory(config.eval_dir)
     (output_directory / 'report.json').write_text(json.dumps(report, indent=2))
 
-    means = report['quality']['means']
-    probe = report['probe']
+    completion_means = report['completions']['means']
+    instruction_means = report['instructions']['means']
     lines = [
         '# Evaluation report: %s' % config.project.name,
         '',
-        '> Judge model: %s. Scores are only meaningful with a capable judge; '
-        'small judge models are unreliable and may rate nonsense highly.'
-        % report['judge_model'],
+        '> Stage: %s. Judge model: %s. The completion and instruction scores '
+        'are the primary measures; the knowledge probe is out-of-distribution '
+        'for a small model and unreliable below larger scales.'
+        % (report['stage'], report['judge_model']),
         '',
-        '## Quality (judge scores, one to ten)',
-        '- grammar: %s' % means.get('grammar'),
-        '- coherence: %s' % means.get('coherence'),
-        '- creativity: %s' % means.get('creativity'),
+        '## Completions (base model, one to ten)',
+        '- grammar: %s' % completion_means.get('grammar'),
+        '- coherence: %s' % completion_means.get('coherence'),
+        '- referent_free: %s' % completion_means.get('referent_free'),
         '',
-        '## Referent-free probe (one to ten, higher means fewer real facts)',
-        '- mean referent_free: %s (scored %s of %s)'
-        % (probe['mean_referent_free'], probe['scored'], len(probe['results'])),
-        '',
-        '### Sample probe answers',
+        '### Sample completions',
     ]
-    for result in probe['results'][:8]:
+    for sample in report['completions']['samples'][:6]:
+        lines.append('- %r' % sample['output'])
+    lines += [
+        '',
+        '## Instruction following (one to ten)',
+        '- coherence: %s' % instruction_means.get('coherence'),
+        '- followed: %s' % instruction_means.get('followed'),
+        '',
+        '### Sample instruction answers',
+    ]
+    for result in report['instructions']['results'][:6]:
         lines.append(
-            '- Q: %s | A: %r (score %s)'
-            % (result['question'], result['answer'], result['referent_free'])
+            '- Q: %s\n  A: %r' % (result['instruction'], result['answer'])
         )
-    lines += ['', '## Interrogation verdict', '',
-              report['interrogation']['verdict'], '', '### Sample exchanges']
-    for turn in report['interrogation']['transcript'][:6]:
-        lines.append('- Q: %s | A: %r' % (turn['question'], turn['answer']))
+    lines += [
+        '',
+        '## Knowledge probe (demoted, out-of-distribution)',
+        '- mean referent_free: %s' % report['probe']['mean_referent_free'],
+    ]
     (output_directory / 'report.md').write_text('\n'.join(lines))
     logger.info('wrote evaluation report to %s', output_directory / 'report.md')
 
 
-def run(config, stage='sft'):
+def run(config, stage='pretrain'):
     set_seed(config.project.seed)
     checkpoint_base = config.sft_dir if stage == 'sft' else config.pretrain_dir
-    checkpoint_path = checkpoint_base / 'ckpt_last.pt'
-    if stage == 'pretrain' and not checkpoint_path.exists():
-        checkpoint_path = config.pretrain_dir / 'ckpt_best.pt'
-    logger.info('loading student checkpoint %s', checkpoint_path)
+    checkpoint_path = checkpoint_base / 'ckpt_best.pt'
+    if not checkpoint_path.exists():
+        checkpoint_path = checkpoint_base / 'ckpt_last.pt'
+    logger.info('loading %s checkpoint %s', stage, checkpoint_path)
     student = StudentModel(config, checkpoint_path)
     engine, sampling, judge_model = _load_judge(config)
 
     report = {
         'stage': stage,
         'judge_model': judge_model,
-        'quality': score_quality(config, student, engine, sampling),
+        'completions': score_completions(config, student, engine, sampling),
+        'instructions': score_instructions(config, student, engine, sampling),
         'probe': knowledge_probe(config, student, engine, sampling),
-        'interrogation': interrogate(config, student, engine, sampling),
     }
     write_report(config, report)
     return report
@@ -300,7 +291,7 @@ def run(config, stage='sft'):
 def main():
     parser = argparse.ArgumentParser(description='Evaluate the trained model')
     parser.add_argument('--config', required=True)
-    parser.add_argument('--stage', default='sft', choices=['pretrain', 'sft'])
+    parser.add_argument('--stage', default='pretrain', choices=['pretrain', 'sft'])
     arguments = parser.parse_args()
     run(load_config(arguments.config), arguments.stage)
 

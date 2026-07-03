@@ -301,14 +301,16 @@ class GPT(nn.Module):
 
     @torch.no_grad()
     def generate(self, input_ids, max_new_tokens, temperature=1.0,
-                 top_k=None, top_p=None, eos_id=None, repetition_penalty=1.0):
+                 top_k=None, top_p=None, eos_id=None, repetition_penalty=1.0,
+                 repetition_window=64):
         for _ in range(max_new_tokens):
             conditioned = input_ids[:, -self.config.block_size:]
             logits, _ = self(conditioned)
             logits = logits[:, -1, :] / max(temperature, 1e-6)
             if repetition_penalty and repetition_penalty != 1.0:
+                recent = input_ids[:, -repetition_window:]
                 for row in range(input_ids.size(0)):
-                    seen = torch.unique(input_ids[row])
+                    seen = torch.unique(recent[row])
                     row_logits = logits[row, seen]
                     logits[row, seen] = torch.where(
                         row_logits > 0,
