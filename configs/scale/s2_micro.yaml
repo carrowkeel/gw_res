@@ -54,6 +54,7 @@ pretrain:
   checkpoint_interval: 500
   validation_fraction: 0.005
   early_stop_patience: 8
+  instruction_fraction: 0.1
 
 finetune:
   batch_size: 32
@@ -74,7 +75,7 @@ eval:
   max_new_tokens: 200
   temperature: 0.8
   top_p: 0.95
-  repetition_penalty: 1.3
+  repetition_penalty: 1.0
   student_gpu_memory_utilization: 0.45
   judge_gpu_memory_utilization: 0.45
 

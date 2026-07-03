@@ -22,6 +22,7 @@ sys.path.insert(0, str(REPOSITORY_ROOT / 'src'))
 from slm.config import load_config
 
 ALL_STAGES = ['generate', 'tokenizer', 'data', 'pretrain', 'finetune', 'evaluate']
+DEFAULT_STAGES = ['generate', 'tokenizer', 'data', 'pretrain', 'evaluate']
 GPU_STAGES = {'generate', 'pretrain', 'finetune', 'evaluate'}
 
 CACHE_VARIABLES = [
@@ -159,7 +160,7 @@ def submit(config_path, stages, dry_run):
 def main():
     parser = argparse.ArgumentParser(description='Submit pipeline to Slurm')
     parser.add_argument('--config', required=True)
-    parser.add_argument('--stages', default=','.join(ALL_STAGES))
+    parser.add_argument('--stages', default=','.join(DEFAULT_STAGES))
     parser.add_argument('--dry-run', action='store_true')
     arguments = parser.parse_args()
     stages = [stage.strip() for stage in arguments.stages.split(',') if stage.strip()]

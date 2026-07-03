@@ -27,13 +27,14 @@ def iterate_corpus_texts(config):
                     yield json.loads(stripped)['text']
     pairs_path = config.data_dir / 'sft' / 'sft.jsonl'
     if pairs_path.exists():
+        from .data import render_instruction
+
         with open(pairs_path) as handle:
             for line in handle:
                 stripped = line.strip()
                 if stripped:
                     record = json.loads(stripped)
-                    yield record['prompt']
-                    yield record['response']
+                    yield render_instruction(record['prompt'], record['response'])
 
 
 def train(config):

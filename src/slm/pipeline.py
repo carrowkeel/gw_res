@@ -16,6 +16,7 @@ from .utils import ensure_directory, get_logger
 logger = get_logger('pipeline')
 
 ALL_STAGES = ['generate', 'tokenizer', 'data', 'pretrain', 'finetune', 'evaluate']
+DEFAULT_STAGES = ['generate', 'tokenizer', 'data', 'pretrain', 'evaluate']
 
 
 def run_stage(name, config):
@@ -43,7 +44,7 @@ def run_stage(name, config):
     elif name == 'evaluate':
         from . import evaluate
 
-        evaluate.run(config, stage='sft')
+        evaluate.run(config, stage='pretrain')
     else:
         raise ValueError('unknown stage %r' % name)
 
@@ -59,7 +60,7 @@ def run(config, stages):
 def main():
     parser = argparse.ArgumentParser(description='Run the pipeline locally')
     parser.add_argument('--config', required=True)
-    parser.add_argument('--stages', default=','.join(ALL_STAGES))
+    parser.add_argument('--stages', default=','.join(DEFAULT_STAGES))
     arguments = parser.parse_args()
     stages = [stage.strip() for stage in arguments.stages.split(',') if stage.strip()]
     run(load_config(arguments.config), stages)

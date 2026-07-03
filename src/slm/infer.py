@@ -40,14 +40,13 @@ class StudentModel:
 
     def respond(self, instruction, max_new_tokens=256, temperature=0.8,
                 top_p=0.95, repetition_penalty=1.0):
-        """Produce a chat-style response using the finetuning framing."""
+        """Answer an instruction using the light Question and Answer framing."""
         import torch
 
-        token_ids = (
-            [self.tokenizer.bos_id, self.tokenizer.user_id]
-            + self.tokenizer.encode(instruction)
-            + [self.tokenizer.assistant_id]
-        )
+        from .data import INSTRUCTION_PREFIX
+
+        prompt_text = INSTRUCTION_PREFIX % instruction.strip()
+        token_ids = [self.tokenizer.bos_id] + self.tokenizer.encode(prompt_text)
         input_ids = torch.tensor(
             [token_ids], dtype=torch.long, device=self.device
         )
@@ -56,4 +55,4 @@ class StudentModel:
             eos_id=self.tokenizer.eos_id, repetition_penalty=repetition_penalty,
         )
         generated = output[0, len(token_ids):].tolist()
-        return self.tokenizer.decode(generated)
+        return self.tokenizer.decode(generated).strip()
