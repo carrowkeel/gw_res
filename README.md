@@ -275,6 +275,17 @@ in-distribution seeds with the base pretrained model:
 python -m slm.sample --config configs/scale/s1_nano.yaml
 ```
 
+To probe a built model interactively by hand, use `slm.chat`, a prompt loop
+over a checkpoint. The pretrain stage continues your text in completion style;
+`--stage sft` answers in the Question and Answer framing. Sampling settings are
+adjustable at runtime (`/temp`, `/topp`, `/penalty`, `/tokens`), and `/stage`
+switches between the two models in place. These are tiny models, so this runs
+fine on CPU; grab an interactive allocation rather than the login node:
+
+```bash
+srun --pty python -m slm.chat --config configs/scale/s1_nano.yaml
+```
+
 ## Layout
 
 ```
@@ -291,6 +302,7 @@ src/slm/
   pretrain.py      stage 3: pretraining loop
   finetune.py      stage 4: supervised finetuning
   infer.py         load a checkpoint and sample
+  chat.py          interactive prompt loop over a checkpoint
   evaluate.py      stage 5: judge, probe, interrogation
   pipeline.py      local orchestrator
 slurm/
