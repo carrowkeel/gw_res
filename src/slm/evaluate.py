@@ -224,8 +224,11 @@ def knowledge_probe(config, student, engine, sampling):
 
 
 def write_report(config, report):
+    stage = report['stage']
     output_directory = ensure_directory(config.eval_dir)
-    (output_directory / 'report.json').write_text(json.dumps(report, indent=2))
+    (output_directory / ('report_%s.json' % stage)).write_text(
+        json.dumps(report, indent=2)
+    )
 
     completion_means = report['completions']['means']
     instruction_means = report['instructions']['means']
@@ -263,16 +266,25 @@ def write_report(config, report):
         '## Knowledge probe (demoted, out-of-distribution)',
         '- mean referent_free: %s' % report['probe']['mean_referent_free'],
     ]
-    (output_directory / 'report.md').write_text('\n'.join(lines))
-    logger.info('wrote evaluation report to %s', output_directory / 'report.md')
+    report_path = output_directory / ('report_%s.md' % stage)
+    report_path.write_text('\n'.join(lines))
+    logger.info('wrote evaluation report to %s', report_path)
+
+
+def _checkpoint_for(config, stage):
+    base = config.sft_dir if stage == 'sft' else config.pretrain_dir
+    for name in ('ckpt_best.pt', 'ckpt_last.pt'):
+        if (base / name).exists():
+            return base / name
+    return None
 
 
 def run(config, stage='pretrain'):
     set_seed(config.project.seed)
-    checkpoint_base = config.sft_dir if stage == 'sft' else config.pretrain_dir
-    checkpoint_path = checkpoint_base / 'ckpt_best.pt'
-    if not checkpoint_path.exists():
-        checkpoint_path = checkpoint_base / 'ckpt_last.pt'
+    checkpoint_path = _checkpoint_for(config, stage)
+    if checkpoint_path is None:
+        logger.info('no %s checkpoint found, skipping', stage)
+        return None
     logger.info('loading %s checkpoint %s', stage, checkpoint_path)
     student = StudentModel(config, checkpoint_path)
     engine, sampling, judge_model = _load_judge(config)
@@ -288,12 +300,28 @@ def run(config, stage='pretrain'):
     return report
 
 
+def run_all(config):
+    """Evaluate the pretrained model and the finetuned model when present."""
+    reports = {}
+    for stage in ('pretrain', 'sft'):
+        report = run(config, stage)
+        if report is not None:
+            reports[stage] = report
+    return reports
+
+
 def main():
     parser = argparse.ArgumentParser(description='Evaluate the trained model')
     parser.add_argument('--config', required=True)
-    parser.add_argument('--stage', default='pretrain', choices=['pretrain', 'sft'])
+    parser.add_argument(
+        '--stage', default='both', choices=['pretrain', 'sft', 'both']
+    )
     arguments = parser.parse_args()
-    run(load_config(arguments.config), arguments.stage)
+    config = load_config(arguments.config)
+    if arguments.stage == 'both':
+        run_all(config)
+    else:
+        run(config, arguments.stage)
 
 
 if __name__ == '__main__':

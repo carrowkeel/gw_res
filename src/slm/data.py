@@ -187,15 +187,19 @@ class PackedDataset:
 
 
 def render_pair_example(tokenizer, instruction, response, maximum_length):
-    """Return input ids and labels with the instruction span masked out."""
-    instruction_ids = (
-        [tokenizer.bos_id, tokenizer.user_id]
-        + tokenizer.encode(instruction)
-        + [tokenizer.assistant_id]
+    """Return input ids and labels with the instruction span masked out.
+
+    Uses the same light Question and Answer format as the co-trained
+    instructions, so finetuning reinforces the format the model already learned
+    rather than shifting it, and loss falls only on the answer span.
+    """
+    prefix_ids = (
+        [tokenizer.bos_id]
+        + tokenizer.encode(INSTRUCTION_PREFIX % instruction.strip())
     )
-    response_ids = tokenizer.encode(response) + [tokenizer.eos_id]
-    input_ids = instruction_ids + response_ids
-    labels = [-100] * len(instruction_ids) + response_ids
+    answer_ids = tokenizer.encode(' ' + response.strip()) + [tokenizer.eos_id]
+    input_ids = prefix_ids + answer_ids
+    labels = [-100] * len(prefix_ids) + answer_ids
     return input_ids[:maximum_length], labels[:maximum_length]
 
 
