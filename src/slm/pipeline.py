@@ -16,7 +16,9 @@ from .utils import ensure_directory, get_logger
 logger = get_logger('pipeline')
 
 ALL_STAGES = ['generate', 'tokenizer', 'data', 'pretrain', 'finetune', 'evaluate']
-DEFAULT_STAGES = ['generate', 'tokenizer', 'data', 'pretrain', 'evaluate']
+DEFAULT_STAGES = [
+    'generate', 'tokenizer', 'data', 'pretrain', 'finetune', 'evaluate',
+]
 
 
 def run_stage(name, config):
@@ -44,7 +46,7 @@ def run_stage(name, config):
     elif name == 'evaluate':
         from . import evaluate
 
-        evaluate.run(config, stage='pretrain')
+        evaluate.run_all(config)
     else:
         raise ValueError('unknown stage %r' % name)
 

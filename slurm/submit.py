@@ -27,7 +27,9 @@ sys.path.insert(0, str(REPOSITORY_ROOT / 'src'))
 from slm.config import load_config
 
 ALL_STAGES = ['generate', 'tokenizer', 'data', 'pretrain', 'finetune', 'evaluate']
-DEFAULT_STAGES = ['generate', 'tokenizer', 'data', 'pretrain', 'evaluate']
+DEFAULT_STAGES = [
+    'generate', 'tokenizer', 'data', 'pretrain', 'finetune', 'evaluate',
+]
 GPU_STAGES = {'generate', 'pretrain', 'finetune', 'evaluate'}
 
 CACHE_VARIABLES = [
@@ -101,7 +103,7 @@ def _stage_command(stage, config, config_path):
         else:
             inner = 'python3 -m slm.pretrain --config %s' % config_path
     elif stage == 'evaluate':
-        inner = 'python3 -m slm.evaluate --config %s --stage sft' % config_path
+        inner = 'python3 -m slm.evaluate --config %s --stage both' % config_path
     elif stage == 'generate' and config.generate.workers > 1:
         inner = (
             'python3 -m slm.generate --config %s --worker-count %d '

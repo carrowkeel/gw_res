@@ -25,17 +25,20 @@ types, and the deferred experiments) lives in the intent graph at
 | tokenizer | `slm.tokenizer` | no | `tokenizer/tokenizer.json` |
 | data | `slm.data` | no | `data/packed/{train,val}.bin`, `meta.json` |
 | pretrain | `slm.pretrain` | yes | `checkpoints/pretrain/ckpt_{best,last}.pt` |
-| evaluate | `slm.evaluate` | yes (vLLM) | `eval/report.{json,md}` |
+| finetune | `slm.finetune` | yes | `checkpoints/sft/ckpt_last.pt` |
+| evaluate | `slm.evaluate` | yes (vLLM) | `eval/report_{pretrain,sft}.{json,md}` |
 
 All artifacts land under `project.out_dir`, for example `runs/poc/`.
 
-Instruction following is learned during pretraining rather than in a separate
-stage. The generated prompt and response pairs are rendered in a light,
-pretraining-adjacent format (`Question: ... Answer: ...`) and mixed into the
-pretraining corpus at `pretrain.instruction_fraction` of the tokens. A separate
-`slm.finetune` stage with role control tokens still exists for later, more
-traditional supervised finetuning, but it is not in the default pipeline;
-request it explicitly with `--stages ...,finetune,...`.
+Instruction following is learned twice over. First it is co-trained during
+pretraining: the generated prompt and response pairs are rendered in a light
+format (`Question: ... Answer: ...`) and mixed into the pretraining corpus at
+`pretrain.instruction_fraction` of the tokens, so the base model already follows
+instructions. The finetune stage then continues training on those same pairs in
+the same format with a response-only loss, sharpening instruction following
+without shifting the format that would otherwise collapse a small model.
+Evaluation covers both models, writing `report_pretrain` and `report_sft`, so
+the effect of finetuning is visible.
 
 ## Referent-free design
 
@@ -232,14 +235,14 @@ torchrun --standalone --nproc_per_node=4 -m slm.pretrain --config configs/poc.ya
 
 ## Evaluation
 
-Evaluation runs on the base pretrained model, which is the product at this
-scale. An existing model judges it two primary ways: completions from
-in-distribution seeds, scored for grammar, coherence, and how free they are of
-real-world referents; and in-world instructions, scored for coherence and for
-whether the answer follows the request. A small real-world knowledge probe is
-kept but demoted, because a tiny model answers such out-of-distribution
-questions poorly and those scores are unreliable. Results are written as
-`report.json` and `report.md`.
+Evaluation runs on both the pretrained model and the finetuned model, writing a
+separate report for each (`report_pretrain` and `report_sft`); a stage with no
+checkpoint is skipped. An existing model judges each two primary ways:
+completions from in-distribution seeds, scored for grammar, coherence, and how
+free they are of real-world referents; and in-world instructions, scored for
+coherence and for whether the answer follows the request. A small real-world
+knowledge probe is kept but demoted, because a tiny model answers such
+out-of-distribution questions poorly and those scores are unreliable.
 
 Score parsing tolerates verbose judge replies, the completion rubric forces low
 grades for text that is not well-formed English, and the report names the judge
