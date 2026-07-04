@@ -106,8 +106,13 @@ disjoint share of every text type and of the pairs with a worker-specific
 prompt seed. A CPU-only `slm-generate-merge` job runs after the array,
 deduplicates across workers, and writes the final `data/pretrain/` shards and
 `data/sft/sft.jsonl`; later stages depend on the merge job. Workers write
-intermediate output to `data/pretrain_workers/` and `data/sft_workers/`. A
-worker can also be run by hand:
+intermediate output to `data/pretrain_workers/` and `data/sft_workers/`.
+
+Each worker also compiles into its own Triton, Inductor, and vLLM cache
+subdirectory (derived from the configured cache locations), so workers sharing
+a node do not race on the same compiled kernel files; the HuggingFace download
+cache stays shared so model weights are fetched once. A worker can also be run
+by hand:
 
 ```bash
 PYTHONPATH=src python3 -m slm.generate --config configs/poc.yaml \

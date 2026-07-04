@@ -20,7 +20,9 @@ generate.workers is above one.
 import argparse
 import hashlib
 import json
+import os
 import random
+import tempfile
 
 from . import filters, prompts
 from .config import load_config
@@ -30,6 +32,11 @@ logger = get_logger('generate')
 
 SHARD_SIZE = 10000
 WORKER_SEED_STRIDE = 1000003
+WORKER_COMPILE_CACHES = {
+    'TRITON_CACHE_DIR': 'triton',
+    'TORCHINDUCTOR_CACHE_DIR': 'torchinductor',
+    'VLLM_CACHE_ROOT': 'vllm',
+}
 
 
 def _normalized_hash(text):
@@ -323,7 +330,36 @@ def merge_workers(config):
     )
 
 
+def _isolate_worker_caches(worker_index):
+    """Point each worker's compile caches at a private directory.
+
+    Independent single-GPU workers that share one Triton, Inductor, or vLLM
+    compile cache race when writing the same compiled kernel, which surfaces
+    as OSError 'Text file busy' (ETXTBSY) and fails most of the workers. Each
+    worker instead compiles into its own subdirectory. The HuggingFace
+    download cache is deliberately left shared so model weights are fetched
+    once rather than once per worker.
+
+    Must run before vLLM, torch, or triton are imported so the environment is
+    read at first use.
+    """
+    for variable, name in WORKER_COMPILE_CACHES.items():
+        existing = os.environ.get(variable)
+        if existing:
+            base = existing
+        else:
+            root = os.environ.get('XDG_CACHE_HOME') or os.path.join(
+                tempfile.gettempdir(), 'slm_cache'
+            )
+            base = os.path.join(root, name)
+        worker_directory = os.path.join(base, 'worker_%02d' % worker_index)
+        ensure_directory(worker_directory)
+        os.environ[variable] = worker_directory
+
+
 def run(config, worker_index=0, worker_count=1):
+    if worker_count > 1:
+        _isolate_worker_caches(worker_index)
     set_seed(config.project.seed + worker_index)
     ensure_directory(config.data_dir)
     generate_pretrain(config, worker_index, worker_count)
