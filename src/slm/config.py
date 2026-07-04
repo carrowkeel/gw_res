@@ -38,6 +38,7 @@ class GenerateConfig:
     frequency_penalty: float = 0.4
     presence_penalty: float = 0.0
     max_tokens: int = 512
+    workers: int = 1
     tensor_parallel_size: int = 1
     gpu_memory_utilization: float = 0.90
     max_model_len: int = 2048

@@ -4,6 +4,11 @@ Each stage becomes one sbatch job. Stages are chained with afterok dependencies
 so the next stage starts only if the previous one succeeded. Resource requests
 come from the slurm section of the config.
 
+When generate.workers is above one, the generate stage becomes a job array of
+that many single-GPU workers, each generating a disjoint share of the corpus,
+followed by a CPU-only merge job that deduplicates across workers and writes
+the final files. Later stages depend on the merge job.
+
     python slurm/submit.py --config configs/poc.yaml
     python slurm/submit.py --config configs/poc.yaml --stages pretrain,finetune,evaluate
     python slurm/submit.py --config configs/poc.yaml --dry-run
@@ -78,10 +83,13 @@ def _environment_prefix(config):
     return (' && '.join(parts) + ' && ') if parts else ''
 
 
-def _stage_command(stage, config, config_path):
-    base = '%scd %s && PYTHONPATH=src' % (
+def _command_base(config):
+    return '%scd %s && PYTHONPATH=src' % (
         _environment_prefix(config), REPOSITORY_ROOT
     )
+
+
+def _stage_command(stage, config, config_path):
     if stage == 'pretrain':
         gres = config.slurm.pretrain_gres or config.slurm.gres
         gpus = _gpu_count(gres)
@@ -94,27 +102,36 @@ def _stage_command(stage, config, config_path):
             inner = 'python3 -m slm.pretrain --config %s' % config_path
     elif stage == 'evaluate':
         inner = 'python3 -m slm.evaluate --config %s --stage sft' % config_path
+    elif stage == 'generate' and config.generate.workers > 1:
+        inner = (
+            'python3 -m slm.generate --config %s --worker-count %d '
+            '--worker-index $SLURM_ARRAY_TASK_ID'
+            % (config_path, config.generate.workers)
+        )
     else:
         inner = 'python3 -m slm.%s --config %s' % (stage, config_path)
-    return '%s %s' % (base, inner)
+    return '%s %s' % (_command_base(config), inner)
 
 
-def _sbatch_arguments(stage, config):
+def _stage_gres(stage, config):
+    if stage not in GPU_STAGES:
+        return None
+    if stage == 'pretrain' and config.slurm.pretrain_gres:
+        return config.slurm.pretrain_gres
+    return config.slurm.gres
+
+
+def _sbatch_arguments(config, job_name, gres):
     slurm = config.slurm
     arguments = [
         'sbatch',
-        '--job-name', 'slm-%s' % stage,
+        '--job-name', job_name,
         '--mem', slurm.memory,
         '--cpus-per-task', str(slurm.cpus_per_task),
         '--time', slurm.time_limit,
         '--parsable',
     ]
-    if stage in GPU_STAGES:
-        gres = (
-            slurm.pretrain_gres
-            if stage == 'pretrain' and slurm.pretrain_gres
-            else slurm.gres
-        )
+    if gres:
         arguments += ['--gres', gres]
     if slurm.partition:
         arguments += ['--partition', slurm.partition]
@@ -127,32 +144,49 @@ def _sbatch_arguments(stage, config):
     return arguments
 
 
+def _submit_job(label, sbatch, command, previous_job, dry_run):
+    if previous_job:
+        sbatch = sbatch + ['--dependency', 'afterok:%s' % previous_job]
+    sbatch = sbatch + ['--wrap', command]
+
+    printable = ' '.join(
+        ('"%s"' % argument if ' ' in argument else argument)
+        for argument in sbatch
+    )
+    if dry_run:
+        print(printable)
+        return '<%s_jobid>' % label
+
+    print('submitting: %s' % label)
+    result = subprocess.run(sbatch, capture_output=True, text=True)
+    if result.returncode != 0:
+        sys.exit('sbatch failed for %s: %s' % (label, result.stderr.strip()))
+    job_id = result.stdout.strip().split(';')[0]
+    suffix = ' (after %s)' % previous_job if previous_job else ''
+    print('  -> job %s%s' % (job_id, suffix))
+    return job_id
+
+
 def submit(config_path, stages, dry_run):
     config = load_config(config_path)
     previous_job = None
     for stage in stages:
-        sbatch = _sbatch_arguments(stage, config)
-        if previous_job:
-            sbatch += ['--dependency', 'afterok:%s' % previous_job]
-        sbatch += ['--wrap', _stage_command(stage, config, config_path)]
-
-        printable = ' '.join(
-            ('"%s"' % argument if ' ' in argument else argument)
-            for argument in sbatch
+        sbatch = _sbatch_arguments(
+            config, 'slm-%s' % stage, _stage_gres(stage, config)
         )
-        if dry_run:
-            print(printable)
-            previous_job = '<%s_jobid>' % stage
+        command = _stage_command(stage, config, config_path)
+        if stage == 'generate' and config.generate.workers > 1:
+            sbatch += ['--array', '0-%d' % (config.generate.workers - 1)]
+            array_job = _submit_job(stage, sbatch, command, previous_job, dry_run)
+            merge_sbatch = _sbatch_arguments(config, 'slm-generate-merge', None)
+            merge_command = '%s python3 -m slm.generate --config %s --merge' % (
+                _command_base(config), config_path
+            )
+            previous_job = _submit_job(
+                'generate-merge', merge_sbatch, merge_command, array_job, dry_run
+            )
             continue
-
-        print('submitting: %s' % stage)
-        result = subprocess.run(sbatch, capture_output=True, text=True)
-        if result.returncode != 0:
-            sys.exit('sbatch failed for %s: %s' % (stage, result.stderr.strip()))
-        job_id = result.stdout.strip().split(';')[0]
-        suffix = ' (after %s)' % previous_job if previous_job else ''
-        print('  -> job %s%s' % (job_id, suffix))
-        previous_job = job_id
+        previous_job = _submit_job(stage, sbatch, command, previous_job, dry_run)
     if not dry_run:
         print('\nAll stages submitted. Track with: squeue -u $USER')
 

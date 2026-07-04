@@ -98,6 +98,23 @@ sbatch --job-name slm-generate --mem 64G --cpus-per-task 8 --gres gpu:l40s:1 \
 
 `slurm/example_stage.sbatch` runs a single stage by hand.
 
+### Parallel generation across GPUs
+
+Set `generate.workers` above one and the submitter turns the generate stage
+into a Slurm job array of that many single-GPU workers, each generating a
+disjoint share of every text type and of the pairs with a worker-specific
+prompt seed. A CPU-only `slm-generate-merge` job runs after the array,
+deduplicates across workers, and writes the final `data/pretrain/` shards and
+`data/sft/sft.jsonl`; later stages depend on the merge job. Workers write
+intermediate output to `data/pretrain_workers/` and `data/sft_workers/`. A
+worker can also be run by hand:
+
+```bash
+PYTHONPATH=src python3 -m slm.generate --config configs/poc.yaml \
+  --worker-count 8 --worker-index 3
+PYTHONPATH=src python3 -m slm.generate --config configs/poc.yaml --merge
+```
+
 ### Redirecting caches off the home directory
 
 Batch jobs do not reliably inherit your login-shell environment, so exporting
@@ -173,10 +190,10 @@ pretrain validation loss and the evaluation report at each step.
 | `s1_nano.yaml` | nano | 1.8M | 300k | ~35M | ~20:1 |
 | `s2_micro.yaml` | micro | 6.0M | 1M | ~120M | ~20:1 |
 
-Each rung generates its own corpus, so generation cost grows with the rung
-(`micro` is a large generation run; raise `generate.tensor_parallel_size` or
-generate across several GPUs to speed it up, and use `slurm.pretrain_gres` for
-multi-GPU pretraining at the higher rungs). The pretrain log prints
+Each rung generates its own corpus, so generation wall time grows with the
+rung (the rung configs raise `generate.workers` accordingly, up to sixteen
+parallel generate jobs for `micro`; use `slurm.pretrain_gres` for multi-GPU
+pretraining at the higher rungs). The pretrain log prints
 `tokens per non-embedding parameter` so the ratio is visible per run.
 
 ```bash
@@ -198,6 +215,7 @@ torchrun --standalone --nproc_per_node=4 -m slm.pretrain --config configs/poc.ya
 ## Key parameters
 
 - `generate.number_of_texts`, `generate.number_of_pairs`: corpus size.
+- `generate.workers`: parallel single-GPU generate jobs under Slurm.
 - `generate.default_model`, `generate.type_models`: generator routing per type.
 - `generate.severity`: referent-removal degree (`s1`, `s2`).
 - `generate.text_type_weights`: relative amount of each text type.

@@ -5,7 +5,16 @@ may be routed to a different model; types are grouped by their resolved model
 so each model loads once. vLLM is imported lazily so this module imports on a
 machine without a GPU, though running it needs one.
 
+Generation parallelizes across GPUs as independent single-GPU workers. Each
+worker generates a disjoint share of every target with a worker-specific
+prompt seed and writes to a worker-scoped directory; a final merge pass
+deduplicates across workers and writes the files downstream stages read. The
+Slurm submitter drives this as a job array followed by a CPU merge job when
+generate.workers is above one.
+
     python -m slm.generate --config configs/poc.yaml
+    python -m slm.generate --config configs/poc.yaml --worker-count 8 --worker-index 3
+    python -m slm.generate --config configs/poc.yaml --merge
 """
 
 import argparse
@@ -20,6 +29,7 @@ from .utils import ensure_directory, get_logger, set_seed
 logger = get_logger('generate')
 
 SHARD_SIZE = 10000
+WORKER_SEED_STRIDE = 1000003
 
 
 def _normalized_hash(text):
@@ -67,6 +77,11 @@ def _chat(engine, sampling, system_prompt, user_prompts, example_turns=None):
     return [output.outputs[0].text.strip() for output in outputs]
 
 
+def _worker_target(total, worker_count, worker_index):
+    base = total // worker_count
+    return base + (1 if worker_index < total % worker_count else 0)
+
+
 def _allocate_counts(weights, total):
     active = {name: weight for name, weight in weights.items() if weight > 0}
     weight_sum = sum(active.values())
@@ -104,12 +119,15 @@ class _ShardWriter:
         self.buffer = []
 
 
-def _generate_type(engine, sampling, config, text_type, target, writer, seen):
+def _generate_type(engine, sampling, config, text_type, target, writer, seen,
+                   worker_index=0):
     generate_config = config.generate
     severity = generate_config.severity
     system_prompt = prompts.build_system_prompt(severity)
     random_generator = random.Random(
-        config.project.seed + hash(text_type) % 10000
+        config.project.seed
+        + worker_index * WORKER_SEED_STRIDE
+        + hash(text_type) % 10000
     )
     kept = 0
     attempts = 0
@@ -143,7 +161,7 @@ def _generate_type(engine, sampling, config, text_type, target, writer, seen):
     return kept
 
 
-def generate_pretrain(config):
+def generate_pretrain(config, worker_index=0, worker_count=1):
     """Generate the referent-free pretraining corpus across text types."""
     generate_config = config.generate
     counts = _allocate_counts(
@@ -151,17 +169,27 @@ def generate_pretrain(config):
     )
     tasks_by_model = {}
     for text_type, target in counts.items():
+        share = _worker_target(target, worker_count, worker_index)
+        if share == 0:
+            continue
         model_name = _resolve_model(generate_config, text_type)
-        tasks_by_model.setdefault(model_name, []).append((text_type, target))
+        tasks_by_model.setdefault(model_name, []).append((text_type, share))
 
-    writer = _ShardWriter(config.data_dir / 'pretrain')
+    if worker_count > 1:
+        directory = (
+            config.data_dir / 'pretrain_workers' / ('worker_%02d' % worker_index)
+        )
+    else:
+        directory = config.data_dir / 'pretrain'
+    writer = _ShardWriter(directory)
     seen = set()
     for model_name, tasks in tasks_by_model.items():
         logger.info('loading generator %s for %d type(s)', model_name, len(tasks))
         engine, sampling = _load_engine(model_name, generate_config)
         for text_type, target in tasks:
             _generate_type(
-                engine, sampling, config, text_type, target, writer, seen
+                engine, sampling, config, text_type, target, writer, seen,
+                worker_index,
             )
         del engine
     writer.flush()
@@ -169,15 +197,25 @@ def generate_pretrain(config):
     return writer.total
 
 
-def generate_pairs(config):
+def generate_pairs(config, worker_index=0, worker_count=1):
     """Generate referent-free instruction and response pairs for finetuning."""
     generate_config = config.generate
     severity = generate_config.severity
     system_prompt = prompts.build_system_prompt(severity)
-    target = generate_config.number_of_pairs
-    random_generator = random.Random(config.project.seed + 1)
-    output_directory = ensure_directory(config.data_dir / 'sft')
-    output_path = output_directory / 'sft.jsonl'
+    target = _worker_target(
+        generate_config.number_of_pairs, worker_count, worker_index
+    )
+    if target == 0:
+        return 0
+    random_generator = random.Random(
+        config.project.seed + 1 + worker_index * WORKER_SEED_STRIDE
+    )
+    if worker_count > 1:
+        output_directory = ensure_directory(config.data_dir / 'sft_workers')
+        output_path = output_directory / ('worker_%02d.jsonl' % worker_index)
+    else:
+        output_directory = ensure_directory(config.data_dir / 'sft')
+        output_path = output_directory / 'sft.jsonl'
 
     engine, sampling = _load_engine(generate_config.default_model, generate_config)
     example_turns = prompts.pair_example_turns()
@@ -226,18 +264,89 @@ def generate_pairs(config):
     return kept
 
 
-def run(config):
-    set_seed(config.project.seed)
+def _iterate_records(paths):
+    for path in paths:
+        with open(path) as handle:
+            for line in handle:
+                stripped = line.strip()
+                if stripped:
+                    yield json.loads(stripped)
+
+
+def merge_workers(config):
+    """Combine worker outputs into the files downstream stages read.
+
+    Deduplicates across workers when deduplication is enabled, since each
+    worker only deduplicates against its own output.
+    """
+    deduplicate = config.generate.deduplicate
+    workers_directory = config.data_dir / 'pretrain_workers'
+    shard_paths = sorted(workers_directory.glob('worker_*/shard_*.jsonl'))
+    if not shard_paths:
+        raise FileNotFoundError('no worker shards in %s' % workers_directory)
+    writer = _ShardWriter(config.data_dir / 'pretrain')
+    seen = set()
+    for record in _iterate_records(shard_paths):
+        if deduplicate:
+            fingerprint = _normalized_hash(record['text'])
+            if fingerprint in seen:
+                continue
+            seen.add(fingerprint)
+        writer.add(record)
+    writer.flush()
+    logger.info(
+        'merged %d worker shard(s) into pretrain corpus: %d documents',
+        len(shard_paths), writer.total,
+    )
+
+    pair_paths = sorted((config.data_dir / 'sft_workers').glob('worker_*.jsonl'))
+    if not pair_paths:
+        logger.warning('no worker pair files, skipping sft merge')
+        return
+    output_directory = ensure_directory(config.data_dir / 'sft')
+    seen = set()
+    kept = 0
+    with open(output_directory / 'sft.jsonl', 'w') as handle:
+        for record in _iterate_records(pair_paths):
+            if deduplicate:
+                fingerprint = _normalized_hash(
+                    record['prompt'] + record['response']
+                )
+                if fingerprint in seen:
+                    continue
+                seen.add(fingerprint)
+            handle.write(json.dumps(record, ensure_ascii=False) + '\n')
+            kept += 1
+    logger.info(
+        'merged %d worker pair file(s): %d finetuning pairs',
+        len(pair_paths), kept,
+    )
+
+
+def run(config, worker_index=0, worker_count=1):
+    set_seed(config.project.seed + worker_index)
     ensure_directory(config.data_dir)
-    generate_pretrain(config)
-    generate_pairs(config)
+    generate_pretrain(config, worker_index, worker_count)
+    generate_pairs(config, worker_index, worker_count)
 
 
 def main():
     parser = argparse.ArgumentParser(description='Generate synthetic data')
     parser.add_argument('--config', required=True)
+    parser.add_argument('--worker-index', type=int, default=0)
+    parser.add_argument('--worker-count', type=int, default=1)
+    parser.add_argument('--merge', action='store_true')
     arguments = parser.parse_args()
-    run(load_config(arguments.config))
+    config = load_config(arguments.config)
+    if arguments.merge:
+        merge_workers(config)
+        return
+    if not 0 <= arguments.worker_index < arguments.worker_count:
+        raise SystemExit(
+            'worker index %d outside worker count %d'
+            % (arguments.worker_index, arguments.worker_count)
+        )
+    run(config, arguments.worker_index, arguments.worker_count)
 
 
 if __name__ == '__main__':
