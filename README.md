@@ -123,6 +123,23 @@ PYTHONPATH=src python3 -m slm.generate --config configs/poc.yaml \
 PYTHONPATH=src python3 -m slm.generate --config configs/poc.yaml --merge
 ```
 
+Generation is resumable and fails loudly on a shortfall. Each worker counts the
+output it already wrote and generates only the missing amount, so a worker that
+fails partway (out of memory, preemption) is topped up rather than restarted. A
+worker that cannot reach its target within the per-run attempt cap exits
+non-zero, and the merge refuses to run until every worker has produced its full
+share, naming any worker that is short. Because the merge depends on the array
+via `afterok`, a failed worker leaves the merge and later stages pending; to
+recover, resubmit the same command once the cause is addressed:
+
+```bash
+python slurm/submit.py --config configs/scale/s2_micro.yaml
+```
+
+Completed workers detect their finished output and exit immediately without
+reloading the generator, so only the failed worker regenerates. (Cancel the
+original pending merge job first, since its dependency can no longer be met.)
+
 ### Redirecting caches off the home directory
 
 Batch jobs do not reliably inherit your login-shell environment, so exporting
