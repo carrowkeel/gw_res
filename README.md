@@ -137,6 +137,23 @@ PYTHONPATH=src python3 -m slm.generate --config configs/poc.yaml \
 PYTHONPATH=src python3 -m slm.generate --config configs/poc.yaml --merge
 ```
 
+Generation is resumable and fails loudly on a shortfall. Each worker counts the
+output it already wrote and generates only the missing amount, so a worker that
+fails partway (out of memory, preemption) is topped up rather than restarted. A
+worker that cannot reach its target within the per-run attempt cap exits
+non-zero, and the merge refuses to run until every worker has produced its full
+share, naming any worker that is short. Because the merge depends on the array
+via `afterok`, a failed worker leaves the merge and later stages pending; to
+recover, resubmit the same command once the cause is addressed:
+
+```bash
+python slurm/submit.py --config configs/scale/s2_micro.yaml
+```
+
+Completed workers detect their finished output and exit immediately without
+reloading the generator, so only the failed worker regenerates. (Cancel the
+original pending merge job first, since its dependency can no longer be met.)
+
 ### Redirecting caches off the home directory
 
 Batch jobs do not reliably inherit your login-shell environment, so exporting
@@ -225,6 +242,55 @@ python slurm/submit.py --config configs/scale/s0_pico.yaml \
   --stages tokenizer,data,pretrain,finetune,evaluate
 ```
 
+## Graph-context pipeline (experimental)
+
+A second pipeline tests whether a graph-structured context carries
+conversation state more token-efficiently than flat text. It reuses the
+generated corpus and the flat pretrained model of a run as its baseline and
+adds five stages that never modify the base artifacts:
+
+| Stage | Module | GPU | Output |
+|-------|--------|-----|--------|
+| graph_transform | `slm.graph_transform` | no | `data/graphs/{graphs,holdout}.jsonl` |
+| graph_tokenizer | `slm.graph_tokenizer` | no | `tokenizer/graph_tokenizer.json` |
+| graph_data | `slm.graph_data` | no | `data/graph_packed/{train,val}.bin` |
+| graph_pretrain | `slm.graph_pretrain` | yes | `checkpoints/graph_pretrain/ckpt_{best,last}.pt` |
+| graph_evaluate | `slm.graph_evaluate` | yes (vLLM judge) | `eval/report_graph.{json,md}` |
+
+The transform stage segments each generated text (speaker turns for
+conversations, grouped sentences otherwise) and folds the segments into a
+per-text context graph with two moves: extend the most lexically related
+node, or add a new node rooted under node zero when nothing related exists.
+An extension that pushes a node past `graph.node_token_limit` splits the
+overflow into a child node; there is no rebalancing or merging, so growth is
+append-mostly. The graphs are trees by construction and use the write2
+intent-graph storage layout for interchange (a few examples are exported
+under `data/graphs/intent_examples/`).
+
+Training examples are the depth-first linearization of the graph built from
+a prefix of the segments (structural markers are reserved tokenizer tokens),
+followed by a next marker and the raw following segment. The graph model is
+pretrained from scratch on these with the same loop and preset as the flat
+model. Evaluation compares the two on held-out conversations at matched
+context-token budgets: the flat model gets the most recent transcript tokens,
+the graph model gets the folded graph reduced to the budget by dropping the
+leaf subtrees least related to the latest turn, and a judge scores each
+continuation for coherence and consistency.
+
+Run it after (or alongside) the base pipeline of the same config:
+
+```bash
+python slurm/submit.py --config configs/poc.yaml \
+  --stages graph_transform,graph_tokenizer,graph_data,graph_pretrain,graph_evaluate
+```
+
+Key parameters live in the `graph` section: `segment_tokens`,
+`node_token_limit`, `relatedness_threshold`, `examples_per_text`,
+`context_dropout`, `holdout_fraction`, `context_budgets`,
+`number_of_eval_conversations`, and `judge_enabled`. Held-out conversations
+are excluded from graph training but remain in the flat corpus, which biases
+the comparison against the graph model, not for it.
+
 ## Multi-GPU pretraining
 
 Set `slurm.pretrain_gres: gpu:l40s:4` (the submitter switches that stage to
@@ -272,6 +338,17 @@ in-distribution seeds with the base pretrained model:
 python -m slm.sample --config configs/scale/s1_nano.yaml
 ```
 
+To probe a built model interactively by hand, use `slm.chat`, a prompt loop
+over a checkpoint. The pretrain stage continues your text in completion style;
+`--stage sft` answers in the Question and Answer framing. Sampling settings are
+adjustable at runtime (`/temp`, `/topp`, `/penalty`, `/tokens`), and `/stage`
+switches between the two models in place. These are tiny models, so this runs
+fine on CPU; grab an interactive allocation rather than the login node:
+
+```bash
+srun --pty python -m slm.chat --config configs/scale/s1_nano.yaml
+```
+
 ## Layout
 
 ```
@@ -285,9 +362,16 @@ src/slm/
   tokenizer.py     stage 1: fresh BPE
   data.py          stage 2: pack corpus, datasets
   model.py         from-scratch decoder
+  graph.py             context graph structure, fold moves, linearization
+  graph_transform.py   graph stage 1: texts to context graphs
+  graph_tokenizer.py   graph stage 2: BPE with structural marker tokens
+  graph_data.py        graph stage 3: pack linearized graph examples
+  graph_pretrain.py    graph stage 4: pretrain the graph-context model
+  graph_evaluate.py    graph stage 5: flat versus graph at matched budgets
   pretrain.py      stage 3: pretraining loop
   finetune.py      stage 4: supervised finetuning
   infer.py         load a checkpoint and sample
+  chat.py          interactive prompt loop over a checkpoint
   evaluate.py      stage 5: judge, probe, interrogation
   pipeline.py      local orchestrator
 slurm/

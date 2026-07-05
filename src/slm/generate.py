@@ -12,6 +12,13 @@ deduplicates across workers and writes the files downstream stages read. The
 Slurm submitter drives this as a job array followed by a CPU merge job when
 generate.workers is above one.
 
+Generation is resumable. A worker counts the output it already wrote and only
+generates the shortfall, so rerunning after a failed worker tops up the missing
+data rather than starting from scratch. A worker that cannot reach its target
+within the per-run attempt cap exits non-zero, and the merge refuses to run
+until every worker has produced its full share, so an incomplete corpus fails
+loudly instead of training on short data.
+
     python -m slm.generate --config configs/poc.yaml
     python -m slm.generate --config configs/poc.yaml --worker-count 8 --worker-index 3
     python -m slm.generate --config configs/poc.yaml --merge
@@ -23,6 +30,7 @@ import json
 import os
 import random
 import tempfile
+from collections import Counter
 
 from . import filters, prompts
 from .config import load_config
@@ -101,12 +109,91 @@ def _allocate_counts(weights, total):
     return counts
 
 
+def _worker_plan(config, worker_index, worker_count):
+    """Return this worker's per-type document targets and its pair target."""
+    generate_config = config.generate
+    counts = _allocate_counts(
+        generate_config.text_type_weights, generate_config.number_of_texts
+    )
+    type_targets = {}
+    for text_type, total in counts.items():
+        share = _worker_target(total, worker_count, worker_index)
+        if share > 0:
+            type_targets[text_type] = share
+    pair_target = _worker_target(
+        generate_config.number_of_pairs, worker_count, worker_index
+    )
+    return type_targets, pair_target
+
+
+def _pretrain_directory(config, worker_index, worker_count):
+    if worker_count > 1:
+        return (
+            config.data_dir / 'pretrain_workers' / ('worker_%02d' % worker_index)
+        )
+    return config.data_dir / 'pretrain'
+
+
+def _pairs_path(config, worker_index, worker_count):
+    if worker_count > 1:
+        return config.data_dir / 'sft_workers' / ('worker_%02d.jsonl' % worker_index)
+    return config.data_dir / 'sft' / 'sft.jsonl'
+
+
+def _scan_pretrain(directory):
+    """Count existing documents per type and collect their fingerprints.
+
+    Tolerates a truncated final line from an interrupted worker so a rerun can
+    resume from whatever was durably written.
+    """
+    counts = Counter()
+    seen = set()
+    if not directory.exists():
+        return counts, seen
+    for shard in sorted(directory.glob('shard_*.jsonl')):
+        with open(shard) as handle:
+            for line in handle:
+                stripped = line.strip()
+                if not stripped:
+                    continue
+                try:
+                    record = json.loads(stripped)
+                except json.JSONDecodeError:
+                    continue
+                counts[record['type']] += 1
+                seen.add(_normalized_hash(record['text']))
+    return counts, seen
+
+
+def _scan_pairs(path):
+    """Return existing valid pairs and their fingerprints from a worker file."""
+    records = []
+    seen = set()
+    if not path.exists():
+        return records, seen
+    with open(path) as handle:
+        for line in handle:
+            stripped = line.strip()
+            if not stripped:
+                continue
+            try:
+                record = json.loads(stripped)
+            except json.JSONDecodeError:
+                continue
+            records.append(record)
+            seen.add(_normalized_hash(record['prompt'] + record['response']))
+    return records, seen
+
+
 class _ShardWriter:
-    def __init__(self, directory):
+    def __init__(self, directory, resume=False):
         self.directory = ensure_directory(directory)
         self.buffer = []
-        self.shard_index = 0
         self.total = 0
+        if resume:
+            self.shard_index = len(list(self.directory.glob('shard_*.jsonl')))
+        else:
+            self.shard_index = 0
 
     def add(self, record):
         self.buffer.append(record)
@@ -117,10 +204,13 @@ class _ShardWriter:
     def flush(self):
         if not self.buffer:
             return
-        path = self.directory / ('shard_%05d.jsonl' % self.shard_index)
-        with open(path, 'w') as handle:
+        name = 'shard_%05d.jsonl' % self.shard_index
+        path = self.directory / name
+        temporary = self.directory / (name + '.tmp')
+        with open(temporary, 'w') as handle:
             for record in self.buffer:
                 handle.write(json.dumps(record, ensure_ascii=False) + '\n')
+        os.replace(temporary, path)
         logger.info('wrote %s (%d documents)', path.name, len(self.buffer))
         self.shard_index += 1
         self.buffer = []
@@ -169,68 +259,96 @@ def _generate_type(engine, sampling, config, text_type, target, writer, seen,
 
 
 def generate_pretrain(config, worker_index=0, worker_count=1):
-    """Generate the referent-free pretraining corpus across text types."""
+    """Generate this worker's share of the pretraining corpus, resuming.
+
+    Counts the documents already written for this worker and generates only the
+    per-type shortfall, so a rerun tops up missing data instead of starting
+    over. Returns a list of (text_type, have, target) tuples for the final
+    per-type counts against this worker's targets.
+    """
     generate_config = config.generate
-    counts = _allocate_counts(
-        generate_config.text_type_weights, generate_config.number_of_texts
-    )
+    type_targets, _ = _worker_plan(config, worker_index, worker_count)
+    directory = _pretrain_directory(config, worker_index, worker_count)
+    existing, seen = _scan_pretrain(directory)
+    have = {text_type: existing.get(text_type, 0) for text_type in type_targets}
+
     tasks_by_model = {}
-    for text_type, target in counts.items():
-        share = _worker_target(target, worker_count, worker_index)
-        if share == 0:
+    for text_type, target in type_targets.items():
+        remaining = target - have[text_type]
+        if remaining <= 0:
             continue
         model_name = _resolve_model(generate_config, text_type)
-        tasks_by_model.setdefault(model_name, []).append((text_type, share))
+        tasks_by_model.setdefault(model_name, []).append((text_type, remaining))
 
-    if worker_count > 1:
-        directory = (
-            config.data_dir / 'pretrain_workers' / ('worker_%02d' % worker_index)
-        )
-    else:
-        directory = config.data_dir / 'pretrain'
-    writer = _ShardWriter(directory)
-    seen = set()
-    for model_name, tasks in tasks_by_model.items():
-        logger.info('loading generator %s for %d type(s)', model_name, len(tasks))
-        engine, sampling = _load_engine(model_name, generate_config)
-        for text_type, target in tasks:
-            _generate_type(
-                engine, sampling, config, text_type, target, writer, seen,
-                worker_index,
+    if tasks_by_model:
+        writer = _ShardWriter(directory, resume=True)
+        for model_name, tasks in tasks_by_model.items():
+            logger.info(
+                'loading generator %s for %d type(s)', model_name, len(tasks)
             )
-        del engine
-    writer.flush()
-    logger.info('pretrain corpus: %d documents', writer.total)
-    return writer.total
+            engine, sampling = _load_engine(model_name, generate_config)
+            for text_type, remaining in tasks:
+                kept = _generate_type(
+                    engine, sampling, config, text_type, remaining, writer,
+                    seen, worker_index,
+                )
+                have[text_type] += kept
+            del engine
+        writer.flush()
+    else:
+        logger.info('worker %d pretrain share already complete', worker_index)
+
+    results = [
+        (text_type, have[text_type], target)
+        for text_type, target in sorted(type_targets.items())
+    ]
+    for text_type, count, target in results:
+        logger.info('%s: %d / %d documents', text_type, count, target)
+    return results
+
+
+def _ensure_trailing_newline(path):
+    """Guarantee the file ends on a record boundary before appending to it."""
+    if not path.exists() or path.stat().st_size == 0:
+        return
+    with open(path, 'rb') as handle:
+        handle.seek(-1, os.SEEK_END)
+        if handle.read(1) == b'\n':
+            return
+    with open(path, 'a') as handle:
+        handle.write('\n')
 
 
 def generate_pairs(config, worker_index=0, worker_count=1):
-    """Generate referent-free instruction and response pairs for finetuning."""
+    """Generate this worker's share of finetuning pairs, resuming.
+
+    Counts the pairs already written for this worker and appends only the
+    shortfall. Returns (have, target).
+    """
     generate_config = config.generate
     severity = generate_config.severity
-    system_prompt = prompts.build_system_prompt()
-    target = _worker_target(
-        generate_config.number_of_pairs, worker_count, worker_index
-    )
+    _, target = _worker_plan(config, worker_index, worker_count)
+    output_path = _pairs_path(config, worker_index, worker_count)
     if target == 0:
-        return 0
+        return (0, 0)
+
+    existing_records, seen = _scan_pairs(output_path)
+    kept = len(existing_records)
+    if kept >= target:
+        logger.info('worker %d pair share already complete', worker_index)
+        return (kept, target)
+
+    ensure_directory(output_path.parent)
+    _ensure_trailing_newline(output_path)
+    system_prompt = prompts.build_system_prompt()
     random_generator = random.Random(
         config.project.seed + 1 + worker_index * WORKER_SEED_STRIDE
     )
-    if worker_count > 1:
-        output_directory = ensure_directory(config.data_dir / 'sft_workers')
-        output_path = output_directory / ('worker_%02d.jsonl' % worker_index)
-    else:
-        output_directory = ensure_directory(config.data_dir / 'sft')
-        output_path = output_directory / 'sft.jsonl'
-
     engine, sampling = _load_engine(generate_config.default_model, generate_config)
     example_turns = prompts.pair_example_turns()
-    seen = set()
-    kept = 0
     attempts = 0
-    maximum_attempts = target * 4 + generate_config.batch_size
-    with open(output_path, 'w') as handle:
+    maximum_attempts = (target - kept) * 4 + generate_config.batch_size
+    with open(output_path, 'a') as handle:
         while kept < target and attempts < maximum_attempts:
             size = min(generate_config.batch_size, (target - kept) * 2 + 1)
             user_prompts = [
@@ -265,9 +383,10 @@ def generate_pairs(config, worker_index=0, worker_count=1):
                     + '\n'
                 )
                 kept += 1
+            handle.flush()
             logger.info('pairs: kept %d / %d', kept, target)
-    logger.info('finetuning pairs: %d -> %s', kept, output_path)
-    return kept
+    logger.info('finetuning pairs: %d / %d -> %s', kept, target, output_path)
+    return (kept, target)
 
 
 def _iterate_records(paths):
@@ -275,22 +394,74 @@ def _iterate_records(paths):
         with open(path) as handle:
             for line in handle:
                 stripped = line.strip()
-                if stripped:
+                if not stripped:
+                    continue
+                try:
                     yield json.loads(stripped)
+                except json.JSONDecodeError:
+                    continue
+
+
+def _collect_worker_output(config, worker_count):
+    """Gather worker output paths and any shortfalls against per-worker targets.
+
+    Returns (shard_paths, pair_paths, shortfalls) where shortfalls lists every
+    worker whose durable output does not yet meet its target.
+    """
+    shard_paths = []
+    pair_paths = []
+    shortfalls = []
+    for worker_index in range(worker_count):
+        type_targets, pair_target = _worker_plan(config, worker_index, worker_count)
+        directory = _pretrain_directory(config, worker_index, worker_count)
+        existing, _ = _scan_pretrain(directory)
+        for text_type, target in sorted(type_targets.items()):
+            have = existing.get(text_type, 0)
+            if have < target:
+                shortfalls.append(
+                    'worker %d %s (%d/%d)' % (worker_index, text_type, have, target)
+                )
+        shard_paths.extend(sorted(directory.glob('shard_*.jsonl')))
+
+        pair_path = _pairs_path(config, worker_index, worker_count)
+        pair_records, _ = _scan_pairs(pair_path)
+        if len(pair_records) < pair_target:
+            shortfalls.append(
+                'worker %d pairs (%d/%d)'
+                % (worker_index, len(pair_records), pair_target)
+            )
+        if pair_path.exists():
+            pair_paths.append(pair_path)
+    return shard_paths, pair_paths, shortfalls
 
 
 def merge_workers(config):
     """Combine worker outputs into the files downstream stages read.
 
-    Deduplicates across workers when deduplication is enabled, since each
-    worker only deduplicates against its own output.
+    Refuses to merge unless every worker has produced its full share, so a
+    failed or short worker fails the merge with a message naming what is
+    missing rather than silently yielding a short corpus. Deduplicates across
+    workers, since each worker only deduplicates against its own output.
     """
-    deduplicate = config.generate.deduplicate
-    workers_directory = config.data_dir / 'pretrain_workers'
-    shard_paths = sorted(workers_directory.glob('worker_*/shard_*.jsonl'))
-    if not shard_paths:
-        raise FileNotFoundError('no worker shards in %s' % workers_directory)
-    writer = _ShardWriter(config.data_dir / 'pretrain')
+    generate_config = config.generate
+    worker_count = generate_config.workers
+    if worker_count <= 1:
+        raise SystemExit('merge requires generate.workers above 1')
+    deduplicate = generate_config.deduplicate
+
+    shard_paths, pair_paths, shortfalls = _collect_worker_output(
+        config, worker_count
+    )
+    if shortfalls:
+        raise SystemExit(
+            'incomplete worker output; rerun generation to top up: %s'
+            % '; '.join(shortfalls)
+        )
+
+    output_directory = ensure_directory(config.data_dir / 'pretrain')
+    for stale in output_directory.glob('shard_*.jsonl'):
+        stale.unlink()
+    writer = _ShardWriter(output_directory)
     seen = set()
     for record in _iterate_records(shard_paths):
         if deduplicate:
@@ -301,18 +472,14 @@ def merge_workers(config):
         writer.add(record)
     writer.flush()
     logger.info(
-        'merged %d worker shard(s) into pretrain corpus: %d documents',
-        len(shard_paths), writer.total,
+        'merged %d worker(s) into pretrain corpus: %d / %d documents',
+        worker_count, writer.total, generate_config.number_of_texts,
     )
 
-    pair_paths = sorted((config.data_dir / 'sft_workers').glob('worker_*.jsonl'))
-    if not pair_paths:
-        logger.warning('no worker pair files, skipping sft merge')
-        return
-    output_directory = ensure_directory(config.data_dir / 'sft')
+    sft_directory = ensure_directory(config.data_dir / 'sft')
     seen = set()
     kept = 0
-    with open(output_directory / 'sft.jsonl', 'w') as handle:
+    with open(sft_directory / 'sft.jsonl', 'w') as handle:
         for record in _iterate_records(pair_paths):
             if deduplicate:
                 fingerprint = _normalized_hash(
@@ -324,8 +491,8 @@ def merge_workers(config):
             handle.write(json.dumps(record, ensure_ascii=False) + '\n')
             kept += 1
     logger.info(
-        'merged %d worker pair file(s): %d finetuning pairs',
-        len(pair_paths), kept,
+        'merged pairs from %d worker(s): %d / %d pairs',
+        worker_count, kept, generate_config.number_of_pairs,
     )
 
 
@@ -361,8 +528,22 @@ def run(config, worker_index=0, worker_count=1):
         _isolate_worker_caches(worker_index)
     set_seed(config.project.seed + worker_index)
     ensure_directory(config.data_dir)
-    generate_pretrain(config, worker_index, worker_count)
-    generate_pairs(config, worker_index, worker_count)
+    pretrain_results = generate_pretrain(config, worker_index, worker_count)
+    pairs_have, pairs_target = generate_pairs(config, worker_index, worker_count)
+
+    shortfalls = [
+        '%s (%d/%d)' % (text_type, have, target)
+        for text_type, have, target in pretrain_results
+        if have < target
+    ]
+    if pairs_have < pairs_target:
+        shortfalls.append('pairs (%d/%d)' % (pairs_have, pairs_target))
+    if shortfalls:
+        raise SystemExit(
+            'worker %d fell short of target for %s; rerun to continue '
+            'generating from the existing output'
+            % (worker_index, ', '.join(shortfalls))
+        )
 
 
 def main():
