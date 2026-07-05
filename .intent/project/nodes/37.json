@@ -1,0 +1,6 @@
+[
+  "Mechanism: construction-solving asymmetry",
+  "Generating a problem and solving it are different-difficulty computational directions, for example differentiation versus integration, multiplying versus factoring, building a maze versus solving it. A program can run the cheap forward direction and pose the expensive reverse direction as a question with a ground truth already known by construction.",
+  "Many problem families have an easy generation direction and a hard solving direction. A generator that runs the easy direction and asks about the hard direction can produce problems that are difficult to solve yet have a free, exact ground-truth answer, without needing a strong solver model to generate or grade them.",
+  "This resolves the apparent paradox that a weak LLM generator should not be able to construct problems that exceed a weak solver model's ability: the generator does not need to solve the hard direction to pose it, it only needs to run the cheap forward process and record what happened. This underpins the deferred logic-document text type (node 23) and is a core design element of the program-as-author architecture (node 38), where the program supplies both the hard question and its verified answer, and the LLM only renders the fragment the solver is allowed to see."
+]

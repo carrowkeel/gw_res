@@ -1,6 +1,6 @@
 [
   "Parameter: severity S3 invented lexicon",
-  "A global, persistent invented content-word vocabulary shared across the corpus. Deferred.",
-  "The most extreme severity rung: a corpus-wide invented lexicon mapping coined content words to abstract meanings, enforced for consistency across documents.",
-  "S3 extends per-document consistency to a persistent, corpus-wide invented vocabulary, giving the model grammar over a fully fictional lexicon with no real referents. It needs a lexicon-generation sub-stage and consistency enforcement and is deferred from the first pass."
+  "A global, persistent invented content-word vocabulary shared across the corpus. Deferred, and promoted from an isolated severity rung to the central coordination mechanism described in node 36.",
+  "The most extreme severity rung: a corpus-wide invented lexicon mapping coined content words to abstract meanings, enforced for consistency across documents. This is now understood as one facet of the persistent world-state generator (node 36), which also carries entities, relations, and information content, not vocabulary alone.",
+  "S3 extends per-document consistency (node 10) to a persistent, corpus-wide invented vocabulary, giving the model grammar over a fully fictional lexicon with no real referents. It needs a lexicon-generation sub-stage and consistency enforcement and is deferred from the first pass. Since the information-is-consistent-novelty analysis (node 34), S3 is no longer scoped as just a stricter vocabulary rung: node 36 reconceives it as a programmatic world-state that supplies both the shared lexicon and the shared facts and relations needed for a corpus to be simultaneously specific, varied, and mutually consistent."
 ]

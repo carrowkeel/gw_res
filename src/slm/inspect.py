@@ -2,7 +2,7 @@
 
 Reports per-type document counts, generation yield against the configured
 target, text-length statistics, and any kept text that still trips the
-referent-free filter. Use this after the generate stage to decide whether the
+contamination filter. Use this after the generate stage to decide whether the
 corpus is clean enough to train on.
 
     python -m slm.inspect --config configs/pilot.yaml
@@ -55,14 +55,13 @@ def _diversity(texts):
 
 def inspect(config):
     """Print a summary of the generated corpus and return the counts."""
-    severity = config.generate.severity
     documents = _load_pretrain(config)
     type_counts = Counter(document.get('type', 'unknown') for document in documents)
     lengths = [len(document['text']) for document in documents]
 
     flagged = []
     for document in documents:
-        reasons = filters.check_text(document['text'], severity)
+        reasons = filters.check_text(document['text'])
         if reasons:
             flagged.append((document.get('type', 'unknown'), reasons, document['text']))
 
@@ -104,8 +103,8 @@ def inspect(config):
         pair_yield = 100.0 * len(pairs) / pair_target if pair_target else 0.0
         pair_flagged = sum(
             1 for pair in pairs
-            if not (filters.passes(pair['prompt'], severity)
-                    and filters.passes(pair['response'], severity))
+            if not (filters.passes(pair['prompt'])
+                    and filters.passes(pair['response']))
         )
         print('sft pairs: %d (target %d, yield %.1f%%)'
               % (len(pairs), pair_target, pair_yield))

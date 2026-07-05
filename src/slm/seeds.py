@@ -1,13 +1,13 @@
-"""Generic, referent-free seed vocabulary for synthetic generation.
+"""Seed vocabulary for diversifying synthetic generation prompts.
 
-These lists supply world primitives at the level of categories rather than
-identifiable real entities. They are sampled to diversify generation prompts
-without ever pulling in real names, numbers, or facts. Everything here is
-deliberately generic: a river, not a named river.
+These lists supply topic and structure primitives (entities, relations, tones,
+forms) that prompts sample from so requests vary in shape, not just in
+wording. They no longer restrict generated content to generic or invented
+referents; that restriction is currently relaxed (see prompts.py).
 
-Severity controls how specific the allowed nouns are. At ``s1`` concrete
-generic nouns (forest, lake, stone) are allowed. At ``s2`` only category-level
-terms (a region, a body of water, a surface) are used.
+Severity still controls how specific the sampled entity nouns are, as a prompt
+variety knob: at ``s1`` concrete nouns (forest, lake, stone) are sampled, at
+``s2`` category-level phrases (a region, a body of water, a surface).
 """
 
 GENERIC_ENTITIES = [
@@ -126,11 +126,6 @@ def invented_name(random_generator):
     nucleus = random_generator.choice(_NAME_NUCLEI)
     coda = random_generator.choice(_NAME_CODAS)
     return (onset + nucleus + coda).capitalize()
-
-
-def invented_term(random_generator):
-    """Return a lowercase invented common-noun-like term for definitions."""
-    return invented_name(random_generator).lower()
 
 
 def entity_pool(severity):

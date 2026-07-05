@@ -1,0 +1,6 @@
+[
+  "Validation: in-context binding tasks",
+  "Present a novel invented entity with attributes stated only in context, then ask comprehension or inference questions about it. Score correctness of binding and inference, not fluency alone.",
+  "A task instance states facts about an invented entity within the prompt (for example, an invented creature with two stated properties) and then asks a question whose answer requires combining those stated properties. This tests whether the model tracks and uses context-local bindings, independent of any real-world knowledge, and is not yet implemented in slm.evaluate.",
+  "Proposed as a new scoring axis in the evaluate stage, generated either by hand-written templates or, more robustly, by the constructed world-state generator (node 36), which can produce such tasks with a program-known ground-truth answer for automatic, non-judge scoring. This is more informative than the current knowledge probe (node 28), which only checks the absence of real facts; in-context binding checks the presence of a genuine, general reasoning capability. Not yet implemented; requires either template task authoring or the world-state generator to exist first."
+]
