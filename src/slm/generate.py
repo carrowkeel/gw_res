@@ -130,7 +130,7 @@ def _generate_type(engine, sampling, config, text_type, target, writer, seen,
                    worker_index=0):
     generate_config = config.generate
     severity = generate_config.severity
-    system_prompt = prompts.build_system_prompt(severity)
+    system_prompt = prompts.build_system_prompt()
     random_generator = random.Random(
         config.project.seed
         + worker_index * WORKER_SEED_STRIDE
@@ -155,7 +155,7 @@ def _generate_type(engine, sampling, config, text_type, target, writer, seen,
                 break
             if len(text) < generate_config.minimum_characters:
                 continue
-            if generate_config.apply_filter and not filters.passes(text, severity):
+            if generate_config.apply_filter and not filters.passes(text):
                 continue
             if generate_config.deduplicate:
                 fingerprint = _normalized_hash(text)
@@ -208,7 +208,7 @@ def generate_pairs(config, worker_index=0, worker_count=1):
     """Generate referent-free instruction and response pairs for finetuning."""
     generate_config = config.generate
     severity = generate_config.severity
-    system_prompt = prompts.build_system_prompt(severity)
+    system_prompt = prompts.build_system_prompt()
     target = _worker_target(
         generate_config.number_of_pairs, worker_count, worker_index
     )
@@ -249,8 +249,7 @@ def generate_pairs(config, worker_index=0, worker_count=1):
                     continue
                 instruction, response = pair
                 if generate_config.apply_filter and not (
-                    filters.passes(instruction, severity)
-                    and filters.passes(response, severity)
+                    filters.passes(instruction) and filters.passes(response)
                 ):
                     continue
                 if generate_config.deduplicate:

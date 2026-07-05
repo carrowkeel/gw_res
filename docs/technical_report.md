@@ -48,11 +48,30 @@ weighted by `generate.text_type_weights`) and `generate.number_of_pairs`
 instruction pairs, at the configured `generate.severity` (`s1` or `s2`).
 Prompts come from `prompts.py`, using rotating structural axes (tone, point of
 view, length band, spatial and comparative relation vocabulary) from
-`seeds.py` to spread content, and a strict system prompt plus few-shot
-exemplars to suppress assistant framing and meta-commentary. Output passes
-through `filters.py` (`BLOCKLIST`, `META_PHRASES`, `check_text`/`passes`) and
-deduplication before being written to `data/pretrain/shard_*.jsonl` and
-`data/sft/sft.jsonl`.
+`seeds.py` to spread content, and a system prompt plus few-shot exemplars to
+suppress assistant framing and meta-commentary. Output passes through
+`filters.py` (`META_PHRASES`, `check_text`/`passes`) and deduplication before
+being written to `data/pretrain/shard_*.jsonl` and `data/sft/sft.jsonl`.
+
+**Referent-free content restrictions are currently relaxed** (intent graph
+node 41): the system prompt no longer forbids real facts, named entities,
+numbers, dates, or technical vocabulary, and the filter no longer blocklists
+real-world words or bans digits (the `BLOCKLIST` word list and the digit and
+proper-noun-run checks described in earlier revisions of this pipeline have
+been removed from `filters.py`). Only assistant-framing and meta-commentary
+detection remain in the filter, since those are corpus-quality problems
+independent of referent-freedom. `generate.severity` (`s1`/`s2`) still
+selects concrete-noun versus category-level prompt vocabulary via
+`seeds.entity_pool`, but no longer changes what content is allowed; the two
+severities currently produce equivalent restrictiveness. The definition text
+type was changed from inventing headwords to asking for real-word
+definitions, so the generator supplies genuine lexical knowledge. This is a
+deliberate, temporary MVP decision: the priority is a working, evaluable
+prompt-response model, since other project work depends on having one;
+referent-freeness is planned to return through a constructed world-state
+generator (node 36) rather than through re-tightening `prompts.py` and
+`filters.py`, since that original mechanism is implicated in the
+diversity-contraction problem (node 35).
 
 When `generate.workers` is greater than one, `slurm/submit.py` turns this
 stage into a Slurm job array of single-GPU workers, each generating a

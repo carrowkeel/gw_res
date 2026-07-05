@@ -15,7 +15,10 @@ types, and the deferred experiments) lives in the intent graph at
 
 > Status: authored for execution on GPU and Slurm infrastructure. The two
 > GPU-only stages (generate, evaluate) have not been run here. The four
-> non-GPU stages run end-to-end on CPU via the smoke config.
+> non-GPU stages run end-to-end on CPU via the smoke config. Referent
+> stripping is currently relaxed in generation for an MVP push toward a
+> functional prompt-response model; see "Referent-free design" below and the
+> intent graph.
 
 ## Stages
 
@@ -42,16 +45,27 @@ the effect of finetuning is visible.
 
 ## Referent-free design
 
+> Currently relaxed: generation's referent-stripping rules (no proper nouns,
+> numbers, dates, real facts, or technical vocabulary) are switched off in
+> `prompts.py` and `filters.py` so the pipeline produces an ordinary,
+> knowledgeable prompt-response model for an MVP push, since other work
+> depends on having a working small language model. The mechanism below is
+> the design to reinstate, planned to happen through a constructed world-state
+> generator (see the intent graph) rather than through prompt and filter
+> restriction. `severity` still selects concrete-noun (`s1`) versus
+> category-level (`s2`) prompt vocabulary, but neither currently restricts
+> content.
+
 - Train from scratch (random initialization): no pretrained weights, no
   inherited knowledge.
 - Fresh BPE tokenizer trained only on the synthetic corpus: the vocabulary
   cannot encode unseen real-world tokens.
-- Referent-free generation: a strict system prompt at the chosen severity that
-  forbids assistant framing and meta-commentary, a few-shot exemplar per text
-  type so the generator returns only the text with no preamble, and a
-  best-effort filter that drops texts with digits, urls, blocklisted real or
-  technology words, or assistant and meta phrases (for example self-reference
-  to being a model, or to the act of writing).
+- Referent-free generation (relaxed, see above): a strict system prompt at the
+  chosen severity that forbids assistant framing and meta-commentary, a
+  few-shot exemplar per text type so the generator returns only the text with
+  no preamble, and a best-effort filter that drops texts with digits, urls,
+  blocklisted real or technology words, or assistant and meta phrases (for
+  example self-reference to being a model, or to the act of writing).
 
 Severity is the dial on the degree of referent removal:
 
