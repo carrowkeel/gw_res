@@ -1,6 +1,6 @@
 [
   "Stage: finetune",
-  "Supervised finetuning on synthetic prompt/response pairs with a response-only loss mask.",
-  "Stage four. The pretrained model is adapted to instruction following on referent-free pairs, computing loss only on the response span.",
-  "Finetuning continues from the pretrain checkpoint and trains on prompt/response pairs rendered with role control tokens, masking the prompt so only the response contributes to the loss. The result is a chat-capable model that stays inside the referent-free world."
+  "Optional continuation training on the same Question/Answer pairs and format used in co-training, with a response-only loss mask. Confirmed to collapse tiny models in three runs; recommended off by default, not yet implemented.",
+  "Stage four, currently still a pipeline default. The pretrained model continues training on the same referent-free pairs and light Question/Answer format already used during pretrain co-training, computing loss only on the response span. Empirically this degrades tiny models rather than improving them (node 30).",
+  "Finetuning continues from the pretrain checkpoint and trains on prompt/response pairs rendered with the same INSTRUCTION_PREFIX format as the co-trained pretraining data (not role control tokens, which was the original design and a confirmed cause of collapse before the redesign), masking the prompt so only the response contributes to the loss. Despite matching the format and using response-only loss, this stage has now collapsed the model into repetitive, low-grammar output in three independent runs (node 30), while the co-trained base pretrained model stays fluent. It remains in the default pipeline stages and Slurm submitter today; the recommended next step, not yet implemented, is to make it an explicit opt-in stage rather than a default one, since co-training in pretrain already delivers instruction-following at this scale."
 ]

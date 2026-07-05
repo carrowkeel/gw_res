@@ -1,0 +1,6 @@
+[
+  "Reframing: processor, not oracle",
+  "The correct role for a referent-free small model is a processor that binds and manipulates information given in context, not an oracle that recalls stored facts. Validation should test binding, not recall.",
+  "A referent-free model has no parametric facts to recall by definition, so an evaluation that scores it on recalling or withholding real-world facts (the knowledge probe) tests the wrong capability and is known to be unreliable at small scale. The capability worth measuring is: given a novel entity and its attributes stated in context, can the model correctly use, compare, and infer from those attributes.",
+  "This reframing follows from the referent-free design itself: since the model cannot cheat with memorized real-world answers, it is a clean testbed for genuine in-context binding, uncontaminated by the possibility that a normal LLM is pattern-matching a memorized answer instead of actually reasoning over the given context. This motivates a new primary validation axis (node 33) to sit alongside, and eventually outrank, the existing knowledge-free probe (node 28), which only measures the absence of a capability rather than the presence of the target one."
+]

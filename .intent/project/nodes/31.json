@@ -1,0 +1,6 @@
+[
+  "Principle: ban bindings, never frames",
+  "Text carries information in layers: syntax, semantic types, frames or schemas, and bound facts. Referent stripping must remove only the bound-fact layer, never the frame layer, or the corpus stops carrying usable structure.",
+  "A sentence like the wood stands above the stream instantiates a spatial frame (higher ground relative to lower ground, adjacency) with generic fillers. Stripping referents means refusing to bind that frame to a specific named entity (a real wood, a real stream); it does not mean refusing the frame itself. Overzealous stripping that also flattens frames produces generic, information-empty text, a distinct failure from referent leakage.",
+  "This principle separates two axes that earlier work conflated: content richness (frames, schemas, relational structure) and referent identity (which real thing a frame is bound to). The filter and prompts target only the second axis. It reframes the diversity-contraction problem observed in generation: when the corpus reads as flat and repetitive, the failure may be frame impoverishment, an LLM-as-author problem (node 35), not severity being too strict. It also underlies the constructed world-state mechanism (node 36): the world-state supplies frames and their bindings programmatically; only the LLM's verbalization is constrained by severity."
+]

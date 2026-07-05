@@ -1,0 +1,6 @@
+[
+  "Domain: abstract number and counting",
+  "Reintroduce pure number and counting, not real-world quantities, as a referent-free reasoning domain: numerals, plural agreement, quantifier scope, and unit-free comparison, while continuing to ban bound real-world quantities such as dates and measurements of real things.",
+  "Severity S1 currently strips all numbers and dates as referents, which also removes ordinary quantity grammar, counting, comparison, quantifier scope, that carries no real-world binding by itself. The proposal is to allow abstract counting and numeric comparison over invented or generic entities, banning only numbers bound to real-world facts, such as a date or a measured real quantity.",
+  "This restores an important reasoning substrate, arithmetic and quantity grammar, that the current filter over-suppresses as a side effect of banning dates and named facts. It is scoped to abstract or invented-entity counting (how many, more than, the same number as) rather than real quantities, and belongs to the G2 reasoning goal (node 2) and the abstract notation mechanism (node 9), since it needs the same relational, non-identifying naming discipline. Not yet implemented; requires updating severity S1's filter and prompts to distinguish bound real quantities from abstract counting."
+]
