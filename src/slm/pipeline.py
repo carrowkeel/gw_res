@@ -15,9 +15,17 @@ from .utils import ensure_directory, get_logger
 
 logger = get_logger('pipeline')
 
-ALL_STAGES = ['generate', 'tokenizer', 'data', 'pretrain', 'finetune', 'evaluate']
+ALL_STAGES = [
+    'generate', 'tokenizer', 'data', 'pretrain', 'finetune', 'evaluate',
+    'graph_transform', 'graph_tokenizer', 'graph_data', 'graph_pretrain',
+    'graph_evaluate',
+]
 DEFAULT_STAGES = [
     'generate', 'tokenizer', 'data', 'pretrain', 'finetune', 'evaluate',
+]
+GRAPH_STAGES = [
+    'graph_transform', 'graph_tokenizer', 'graph_data', 'graph_pretrain',
+    'graph_evaluate',
 ]
 
 
@@ -47,6 +55,26 @@ def run_stage(name, config):
         from . import evaluate
 
         evaluate.run_all(config)
+    elif name == 'graph_transform':
+        from . import graph_transform
+
+        graph_transform.run(config)
+    elif name == 'graph_tokenizer':
+        from . import graph_tokenizer
+
+        graph_tokenizer.train(config)
+    elif name == 'graph_data':
+        from . import graph_data
+
+        graph_data.run(config)
+    elif name == 'graph_pretrain':
+        from . import graph_pretrain
+
+        graph_pretrain.run(config)
+    elif name == 'graph_evaluate':
+        from . import graph_evaluate
+
+        graph_evaluate.run(config)
     else:
         raise ValueError('unknown stage %r' % name)
 

@@ -135,6 +135,21 @@ class EvalConfig:
 
 
 @dataclass
+class GraphConfig:
+    segment_tokens: int = 48
+    node_token_limit: int = 200
+    relatedness_threshold: float = 0.1
+    examples_per_text: int = 6
+    context_dropout: float = 0.1
+    holdout_fraction: float = 0.02
+    export_intent_examples: int = 3
+    context_budgets: list = field(default_factory=lambda: [64, 128, 256])
+    number_of_eval_conversations: int = 50
+    max_new_tokens: int = 96
+    judge_enabled: bool = True
+
+
+@dataclass
 class SlurmConfig:
     enabled: bool = True
     partition: str = None
@@ -159,6 +174,7 @@ class Config:
     pretrain: PretrainConfig = field(default_factory=PretrainConfig)
     finetune: FinetuneConfig = field(default_factory=FinetuneConfig)
     eval: EvalConfig = field(default_factory=EvalConfig)
+    graph: GraphConfig = field(default_factory=GraphConfig)
     slurm: SlurmConfig = field(default_factory=SlurmConfig)
 
     @property
@@ -185,6 +201,22 @@ class Config:
     def eval_dir(self):
         return self.out_dir / 'eval'
 
+    @property
+    def graphs_dir(self):
+        return self.data_dir / 'graphs'
+
+    @property
+    def graph_packed_dir(self):
+        return self.data_dir / 'graph_packed'
+
+    @property
+    def graph_tokenizer_path(self):
+        return self.out_dir / 'tokenizer' / 'graph_tokenizer.json'
+
+    @property
+    def graph_pretrain_dir(self):
+        return self.out_dir / 'checkpoints' / 'graph_pretrain'
+
 
 _SECTION_TYPES = {
     'project': ProjectConfig,
@@ -194,6 +226,7 @@ _SECTION_TYPES = {
     'pretrain': PretrainConfig,
     'finetune': FinetuneConfig,
     'eval': EvalConfig,
+    'graph': GraphConfig,
     'slurm': SlurmConfig,
 }
 

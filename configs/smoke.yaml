@@ -61,6 +61,16 @@ eval:
   number_of_probe_questions: 10
   max_new_tokens: 64
 
+graph:
+  segment_tokens: 32
+  node_token_limit: 120
+  examples_per_text: 4
+  holdout_fraction: 0.15
+  context_budgets: [48, 96, 192]
+  number_of_eval_conversations: 6
+  max_new_tokens: 48
+  judge_enabled: false
+
 slurm:
   gres: gpu:l40s:1
   memory: 32G
