@@ -228,6 +228,55 @@ python slurm/submit.py --config configs/scale/s0_pico.yaml \
   --stages tokenizer,data,pretrain,finetune,evaluate
 ```
 
+## Graph-context pipeline (experimental)
+
+A second pipeline tests whether a graph-structured context carries
+conversation state more token-efficiently than flat text. It reuses the
+generated corpus and the flat pretrained model of a run as its baseline and
+adds five stages that never modify the base artifacts:
+
+| Stage | Module | GPU | Output |
+|-------|--------|-----|--------|
+| graph_transform | `slm.graph_transform` | no | `data/graphs/{graphs,holdout}.jsonl` |
+| graph_tokenizer | `slm.graph_tokenizer` | no | `tokenizer/graph_tokenizer.json` |
+| graph_data | `slm.graph_data` | no | `data/graph_packed/{train,val}.bin` |
+| graph_pretrain | `slm.graph_pretrain` | yes | `checkpoints/graph_pretrain/ckpt_{best,last}.pt` |
+| graph_evaluate | `slm.graph_evaluate` | yes (vLLM judge) | `eval/report_graph.{json,md}` |
+
+The transform stage segments each generated text (speaker turns for
+conversations, grouped sentences otherwise) and folds the segments into a
+per-text context graph with two moves: extend the most lexically related
+node, or add a new node rooted under node zero when nothing related exists.
+An extension that pushes a node past `graph.node_token_limit` splits the
+overflow into a child node; there is no rebalancing or merging, so growth is
+append-mostly. The graphs are trees by construction and use the write2
+intent-graph storage layout for interchange (a few examples are exported
+under `data/graphs/intent_examples/`).
+
+Training examples are the depth-first linearization of the graph built from
+a prefix of the segments (structural markers are reserved tokenizer tokens),
+followed by a next marker and the raw following segment. The graph model is
+pretrained from scratch on these with the same loop and preset as the flat
+model. Evaluation compares the two on held-out conversations at matched
+context-token budgets: the flat model gets the most recent transcript tokens,
+the graph model gets the folded graph reduced to the budget by dropping the
+leaf subtrees least related to the latest turn, and a judge scores each
+continuation for coherence and consistency.
+
+Run it after (or alongside) the base pipeline of the same config:
+
+```bash
+python slurm/submit.py --config configs/poc.yaml \
+  --stages graph_transform,graph_tokenizer,graph_data,graph_pretrain,graph_evaluate
+```
+
+Key parameters live in the `graph` section: `segment_tokens`,
+`node_token_limit`, `relatedness_threshold`, `examples_per_text`,
+`context_dropout`, `holdout_fraction`, `context_budgets`,
+`number_of_eval_conversations`, and `judge_enabled`. Held-out conversations
+are excluded from graph training but remain in the flat corpus, which biases
+the comparison against the graph model, not for it.
+
 ## Multi-GPU pretraining
 
 Set `slurm.pretrain_gres: gpu:l40s:4` (the submitter switches that stage to
@@ -299,6 +348,12 @@ src/slm/
   tokenizer.py     stage 1: fresh BPE
   data.py          stage 2: pack corpus, datasets
   model.py         from-scratch decoder
+  graph.py             context graph structure, fold moves, linearization
+  graph_transform.py   graph stage 1: texts to context graphs
+  graph_tokenizer.py   graph stage 2: BPE with structural marker tokens
+  graph_data.py        graph stage 3: pack linearized graph examples
+  graph_pretrain.py    graph stage 4: pretrain the graph-context model
+  graph_evaluate.py    graph stage 5: flat versus graph at matched budgets
   pretrain.py      stage 3: pretraining loop
   finetune.py      stage 4: supervised finetuning
   infer.py         load a checkpoint and sample

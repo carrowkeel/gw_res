@@ -56,7 +56,12 @@ def _setup_device():
     return 'cuda' if torch.cuda.is_available() else 'cpu'
 
 
-def run(config):
+def run(config, packed_directory=None, checkpoint_root=None):
+    """Pretrain from packed binaries.
+
+    packed_directory and checkpoint_root default to the base pipeline paths;
+    the graph pipeline passes its own so both models train with the same loop.
+    """
     import torch
     from torch.nn.parallel import DistributedDataParallel
 
@@ -67,7 +72,8 @@ def run(config):
     device_type = 'cuda' if device.startswith('cuda') else 'cpu'
     pretrain_config = config.pretrain
 
-    packed_directory = config.data_dir / 'packed'
+    if packed_directory is None:
+        packed_directory = config.data_dir / 'packed'
     meta = json.loads((packed_directory / 'meta.json').read_text())
     vocabulary_size = meta['vocabulary_size']
     dtype = meta['dtype']
@@ -125,7 +131,9 @@ def run(config):
         config.project.seed + get_local_rank()
     )
 
-    checkpoint_directory = ensure_directory(config.pretrain_dir)
+    checkpoint_directory = ensure_directory(
+        checkpoint_root if checkpoint_root is not None else config.pretrain_dir
+    )
     start_step = 0
     best_validation = float('inf')
     evaluations_since_best = 0

@@ -26,11 +26,18 @@ sys.path.insert(0, str(REPOSITORY_ROOT / 'src'))
 
 from slm.config import load_config
 
-ALL_STAGES = ['generate', 'tokenizer', 'data', 'pretrain', 'finetune', 'evaluate']
+ALL_STAGES = [
+    'generate', 'tokenizer', 'data', 'pretrain', 'finetune', 'evaluate',
+    'graph_transform', 'graph_tokenizer', 'graph_data', 'graph_pretrain',
+    'graph_evaluate',
+]
 DEFAULT_STAGES = [
     'generate', 'tokenizer', 'data', 'pretrain', 'finetune', 'evaluate',
 ]
-GPU_STAGES = {'generate', 'pretrain', 'finetune', 'evaluate'}
+GPU_STAGES = {
+    'generate', 'pretrain', 'finetune', 'evaluate',
+    'graph_pretrain', 'graph_evaluate',
+}
 
 CACHE_VARIABLES = [
     'HF_HOME', 'HF_HUB_CACHE', 'HUGGINGFACE_HUB_CACHE', 'TRANSFORMERS_CACHE',
@@ -92,16 +99,16 @@ def _command_base(config):
 
 
 def _stage_command(stage, config, config_path):
-    if stage == 'pretrain':
+    if stage in ('pretrain', 'graph_pretrain'):
         gres = config.slurm.pretrain_gres or config.slurm.gres
         gpus = _gpu_count(gres)
         if gpus > 1:
             inner = (
                 'torchrun --standalone --nproc_per_node=%d '
-                '-m slm.pretrain --config %s' % (gpus, config_path)
+                '-m slm.%s --config %s' % (gpus, stage, config_path)
             )
         else:
-            inner = 'python3 -m slm.pretrain --config %s' % config_path
+            inner = 'python3 -m slm.%s --config %s' % (stage, config_path)
     elif stage == 'evaluate':
         inner = 'python3 -m slm.evaluate --config %s --stage both' % config_path
     elif stage == 'generate' and config.generate.workers > 1:
@@ -118,7 +125,7 @@ def _stage_command(stage, config, config_path):
 def _stage_gres(stage, config):
     if stage not in GPU_STAGES:
         return None
-    if stage == 'pretrain' and config.slurm.pretrain_gres:
+    if stage in ('pretrain', 'graph_pretrain') and config.slurm.pretrain_gres:
         return config.slurm.pretrain_gres
     return config.slurm.gres
 
