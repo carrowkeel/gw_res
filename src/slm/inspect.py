@@ -21,7 +21,7 @@ logger = get_logger('inspect')
 
 def _load_pretrain(config):
     documents = []
-    pretrain_directory = config.data_dir / 'pretrain'
+    pretrain_directory = config.corpus_pretrain_dir
     for shard in sorted(pretrain_directory.glob('shard_*.jsonl')):
         with open(shard) as handle:
             for line in handle:
@@ -89,7 +89,7 @@ def inspect(config):
         print('  [%s] %s' % (text_type, ', '.join(reasons)))
         print('    %r' % text[:160])
 
-    pairs_path = config.data_dir / 'sft' / 'sft.jsonl'
+    pairs_path = config.corpus_sft_path
     if pairs_path.exists():
         pairs = []
         with open(pairs_path) as handle:

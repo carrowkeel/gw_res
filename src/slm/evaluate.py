@@ -9,7 +9,7 @@ mixed-in Question and Answer text). A small real-world knowledge probe is kept
 but demoted: a tiny model answers such out-of-distribution questions poorly, so
 those scores are unreliable and labelled as such.
 
-    python -m slm.evaluate --config configs/scale/s1_nano.yaml
+    python -m slm.evaluate --config runs/world/pico/config.yaml
 """
 
 import argparse

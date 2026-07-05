@@ -6,8 +6,8 @@ probe questions are out of distribution. This command instead completes short
 in-distribution seeds with the base pretrained model and no repetition penalty,
 which is the fair measure of what pretraining actually learned.
 
-    python -m slm.sample --config configs/scale/s1_nano.yaml
-    python -m slm.sample --config configs/scale/s1_nano.yaml --stage sft --penalty 1.3
+    python -m slm.sample --config runs/world/pico/config.yaml
+    python -m slm.sample --config runs/world/pico/config.yaml --stage sft --penalty 1.3
 """
 
 import argparse

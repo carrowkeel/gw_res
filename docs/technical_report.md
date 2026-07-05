@@ -34,7 +34,7 @@ slurm/
   example_stage.sbatch
 configs/
   poc.yaml, smoke.yaml, pilot.yaml
-  scale/s0_pico.yaml, s1_nano.yaml, s2_micro.yaml
+  scale/world.yaml
 ```
 
 ## Current pipeline, stage by stage
@@ -117,23 +117,25 @@ the primary mechanism by which the model learns instruction-following
 ordinary tokens in the same training stream as pretraining text, the model
 does not need a second training phase to acquire the Question/Answer format.
 
-### finetune (`src/slm/finetune.py`) -- confirmed harmful at small scale, not yet made opt-in
+### finetune (`src/slm/finetune.py`) -- kept as a default, improved gradually
 
 Continues from the pretrain checkpoint, training on the same pairs and the
-same light format via `PairDataset`, with response-only loss. This stage is
-still a default pipeline stage in both `pipeline.py` and `slurm/submit.py`.
-It has empirically collapsed the model into repetitive, low-grammar output in
-three independent runs even after the redesign that removed role tokens
-(node 30): an early 60M-parameter run, the nano scale-ladder run
-(`report_pretrain` grammar 8.18 versus `report_sft` grammar 1.7), and a
-pattern consistent with the same collapse in the micro run. **This is the
-most concrete pending code change**: make `finetune` an explicit opt-in
-stage (remove it from `DEFAULT_STAGES` in `src/slm/pipeline.py` and
-`slurm/submit.py`, keep it runnable via `--stages ...,finetune,...`), since
-co-training alone already delivers instruction-following at this scale. Not
-yet implemented because it has not been explicitly approved as a code change
-in this session (the session shifted to documentation before circling back
-to it); it is a small, mechanical change once approved.
+same light format via `PairDataset`, with response-only loss. It is a default
+pipeline stage in both `pipeline.py` and `slurm/submit.py`. It has empirically
+collapsed the model into repetitive, low-grammar output in three independent
+runs even after the redesign that removed role tokens (node 30): an early
+60M-parameter run, the nano scale-ladder run (`report_pretrain` grammar 8.18
+versus `report_sft` grammar 1.7), and a pattern consistent with the same
+collapse in the micro run. **Decision (reversing the earlier
+make-it-opt-in recommendation):** keep finetune as a default and improve it
+gradually. It is cheap relative to data generation, the scale-world runner
+(node 43) exercises it at every rung so each run yields a `report_sft` at
+pico/nano/micro/full, and all the collapse evidence predates the referent
+relaxation and the multi-domain content broadening -- so whether the collapse
+persists on the current corpus is itself an open experiment. Candidate
+improvements to try through this surface: replaying pretraining data during
+finetuning to counter the forgetting that likely drives the collapse, and
+lighter-touch adaptation.
 
 ### evaluate (`src/slm/evaluate.py`)
 
@@ -225,16 +227,25 @@ before validation runs). Notable fields for continuing work:
 
 ## Scaling ladder status
 
-`configs/scale/s0_pico.yaml` (0.43M non-embedding params, ~75k texts, ~9M
-tokens), `s1_nano.yaml` (1.8M params, ~300k texts, ~35M tokens), and
-`s2_micro.yaml` (6.0M params, 1M texts, ~120M tokens) target roughly 20
-tokens per non-embedding parameter. Results so far: pico and nano both ran
-end-to-end; the base pretrained model is fluent and correctly avoids stating
-real facts at both scales, and the separate sft checkpoint collapsed at
-nano (see above). Micro's interactive session showed coherent, referent-free
-completions from the pretrain model; no separate sft report was surfaced by
-the user for micro, so its sft behavior is unconfirmed but should be assumed
-consistent with pico and nano until shown otherwise.
+The three standalone scale configs (`s0_pico`, `s1_nano`, `s2_micro`), which
+each regenerated their own corpus, have been replaced by the progressive
+scale-world runner (`configs/scale/world.yaml`, node 43). It defines one full
+generation target plus a `scale:` section of rungs
+(`pico 0.10, nano 0.25, micro 0.50, full 1.00` by default, each with its own
+preset and per-rung training overrides), and the Slurm submitter builds a
+progressive DAG: cumulative generation chunks, each frozen into a snapshot
+(`runs/world/corpus_<rung>/`) that a rung trains on while the next chunk keeps
+generating. See the generate/config/submit sections below and the README's
+scaling-ladder section for the mechanics.
+
+Results from the previous per-config ladder still stand as the most recent
+training evidence, all on the old referent-free scenery corpus: pico and nano
+ran end-to-end with a fluent, referent-avoiding base pretrained model, and the
+separate sft checkpoint collapsed at nano (`report_sft` grammar 1.7). Micro's
+interactive session showed coherent completions from the pretrain model; its
+sft behavior was never separately reported. None of this has been re-measured
+since the referent relaxation and content broadening, so the scale-world runner
+on the new corpus is the next source of real results.
 
 ## Known inconsistency to clean up
 
@@ -243,19 +254,19 @@ tokens left over from the original role-token SFT design, which was replaced
 by the light Question/Answer text format (no special role tokens needed,
 since the format is plain text). These tokens are currently unused by
 `data.py` or `infer.py`. Leave them only if there is a reason to keep them for
-forward compatibility; otherwise they are a candidate for removal alongside
-the finetune-default change, since both trace back to the same historical
-design.
+forward compatibility; otherwise they are a candidate for removal, since they
+trace back to the abandoned role-token SFT design.
 
 ## Next steps, ranked by decision strength
 
-1. **Make `finetune` opt-in, not default.** Concretely decided in direction
-   (three confirmed collapse instances, explicit recommendation stated), not
-   yet implemented in code. Change: remove `'finetune'` from `DEFAULT_STAGES`
-   in `src/slm/pipeline.py` and `slurm/submit.py`; keep the stage's code and
-   Slurm command construction unchanged so it remains runnable via an
-   explicit `--stages` list. Update `README.md`'s stage table and pipeline
-   description accordingly.
+1. **Run the scale-world ladder on the new corpus and iterate on finetune.**
+   The immediate source of real results: run `configs/scale/world.yaml`,
+   inspect each rung's frozen corpus snapshot, and compare `report_pretrain`
+   against `report_sft` at pico/nano/micro/full. The standing decision is to
+   keep finetune a default and improve it gradually (node 15, node 30), not to
+   remove it; the first experiment is simply whether the collapse persists on
+   the relaxed, multi-domain corpus, followed by trying pretraining-data replay
+   during finetuning to counter forgetting.
 
 2. **In-context binding evaluation axis.** Theoretically well-motivated
    (node 32, node 33) and the clearest next validation improvement, but needs

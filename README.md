@@ -167,7 +167,7 @@ via `afterok`, a failed worker leaves the merge and later stages pending; to
 recover, resubmit the same command once the cause is addressed:
 
 ```bash
-python slurm/submit.py --config configs/scale/s2_micro.yaml
+python slurm/submit.py --config configs/scale/world.yaml
 ```
 
 Completed workers detect their finished output and exit immediately without
@@ -236,31 +236,46 @@ python slurm/submit.py --config configs/pilot.yaml \
 length statistics, and any kept text that still trips the referent-free filter,
 so the "look at the data" step is one command.
 
-## Scaling ladder
+## Scaling ladder: the scale-world runner
 
-`configs/scale/` holds a ladder of self-contained runs that grow the model and
-the corpus together at a roughly twenty-tokens-per-parameter ratio, so the model
-is neither starved nor oversized at any rung. Run them in order and compare the
-pretrain validation loss and the evaluation report at each step.
+`configs/scale/world.yaml` defines one growing corpus and a ladder of models
+trained on nested fractions of it. Because every fraction of the corpus is the
+same quality, the smaller corpora are prefixes of the larger one, so no data is
+ever regenerated per rung: a rung just trains on a snapshot of the corpus so
+far. The config sets the full (largest) generation target and model, plus a
+`scale:` section listing rungs, each a `{name, fraction, + per-rung overrides}`:
 
-| Config | preset | non-embed params | texts | approx tokens | ratio |
-|--------|--------|------------------|-------|---------------|-------|
-| `s0_pico.yaml` | pico | 0.43M | 75k | ~9M | ~20:1 |
-| `s1_nano.yaml` | nano | 1.8M | 300k | ~35M | ~20:1 |
-| `s2_micro.yaml` | micro | 6.0M | 1M | ~120M | ~20:1 |
+| Rung | fraction | preset | approx texts | approx tokens |
+|------|----------|--------|--------------|---------------|
+| pico | 0.10 | pico | 100k | ~12M |
+| nano | 0.25 | nano | 250k | ~30M |
+| micro | 0.50 | micro | 500k | ~60M |
+| full | 1.00 | micro | 1M | ~120M |
 
-Each rung generates its own corpus, so generation wall time grows with the
-rung (the rung configs raise `generate.workers` accordingly, up to sixteen
-parallel generate jobs for `micro`; use `slurm.pretrain_gres` for multi-GPU
-pretraining at the higher rungs). The pretrain log prints
-`tokens per non-embedding parameter` so the ratio is visible per run.
+The submitter detects the `scale` section and runs a **progressive** ladder.
+Generation proceeds in cumulative chunks (the resumable generator tops up to
+each rung's target); as each chunk is merged into a frozen snapshot
+(`runs/world/corpus_<rung>/`), that rung trains a model on the snapshot while
+the next chunk keeps generating. Models are therefore built while data is still
+being generated, and because data generation is the most expensive step, you
+can stop the whole process early if a rung looks wrong:
 
 ```bash
-python slurm/submit.py --config configs/scale/s0_pico.yaml --stages generate
-python -m slm.inspect --config configs/scale/s0_pico.yaml
-python slurm/submit.py --config configs/scale/s0_pico.yaml \
-  --stages tokenizer,data,pretrain,finetune,evaluate
+python slurm/submit.py --config configs/scale/world.yaml --dry-run
+python slurm/submit.py --config configs/scale/world.yaml
+# inspect a rung's frozen corpus snapshot at any point
+python -m slm.inspect --config runs/world/pico/config.yaml
+# stop early if a rung reveals a problem
+scancel --name slm-gen-nano --name slm-merge-nano   # and later rung jobs
 ```
+
+Each rung writes its own tokenizer, packed data, checkpoints, and evaluation
+reports under `runs/world/<rung>/`; the submitter materializes each rung's
+resolved config there. Since every rung runs finetune and evaluates both the
+pretrained and finetuned checkpoints, one ladder yields a `report_sft` at every
+scale, which is the cheap, repeated signal used to iterate on the finetuning
+stage. The pretrain log prints `tokens per non-embedding parameter` per rung so
+the size ratio stays visible.
 
 ## Graph-context pipeline (experimental)
 
@@ -355,7 +370,7 @@ To read raw completions directly, use `slm.sample`, which completes
 in-distribution seeds with the base pretrained model:
 
 ```bash
-python -m slm.sample --config configs/scale/s1_nano.yaml
+python -m slm.sample --config runs/world/pico/config.yaml
 ```
 
 To probe a built model interactively by hand, use `slm.chat`, a prompt loop
@@ -366,7 +381,7 @@ switches between the two models in place. These are tiny models, so this runs
 fine on CPU; grab an interactive allocation rather than the login node:
 
 ```bash
-srun --pty python -m slm.chat --config configs/scale/s1_nano.yaml
+srun --pty python -m slm.chat --config runs/world/pico/config.yaml
 ```
 
 ## Layout

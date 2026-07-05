@@ -31,7 +31,7 @@ def render_instruction(prompt, response):
 
 def iterate_pairs(config):
     """Yield (prompt, response) tuples from the generated pairs file."""
-    path = config.data_dir / 'sft' / 'sft.jsonl'
+    path = config.corpus_sft_path
     if not path.exists():
         return
     with open(path) as handle:
@@ -81,7 +81,7 @@ def prepare_pretrain(config):
     """Tokenize the corpus, mix in instructions, and write packed binaries."""
     tokenizer = SyntheticTokenizer(config.tokenizer_path)
     dtype = _dtype_for_vocabulary(tokenizer.vocabulary_size)
-    pretrain_directory = config.data_dir / 'pretrain'
+    pretrain_directory = config.corpus_pretrain_dir
     output_directory = ensure_directory(config.data_dir / 'packed')
 
     shards = sorted(pretrain_directory.glob('shard_*.jsonl'))
@@ -209,7 +209,7 @@ class PairDataset:
     def __init__(self, config, tokenizer):
         self.examples = []
         self.pad_id = tokenizer.pad_id
-        path = config.data_dir / 'sft' / 'sft.jsonl'
+        path = config.corpus_sft_path
         maximum_length = config.finetune.maximum_sequence_length
         with open(path) as handle:
             for line in handle:

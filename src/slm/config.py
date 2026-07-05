@@ -16,6 +16,7 @@ class ProjectConfig:
     name: str = 'slm-poc'
     out_dir: str = 'runs/poc'
     seed: int = 1337
+    corpus_dir: str = None
 
 
 @dataclass
@@ -151,6 +152,11 @@ class GraphConfig:
 
 
 @dataclass
+class ScaleConfig:
+    rungs: list = field(default_factory=list)
+
+
+@dataclass
 class SlurmConfig:
     enabled: bool = True
     partition: str = None
@@ -176,6 +182,7 @@ class Config:
     finetune: FinetuneConfig = field(default_factory=FinetuneConfig)
     eval: EvalConfig = field(default_factory=EvalConfig)
     graph: GraphConfig = field(default_factory=GraphConfig)
+    scale: ScaleConfig = field(default_factory=ScaleConfig)
     slurm: SlurmConfig = field(default_factory=SlurmConfig)
 
     @property
@@ -185,6 +192,16 @@ class Config:
     @property
     def data_dir(self):
         return self.out_dir / 'data'
+
+    @property
+    def corpus_pretrain_dir(self):
+        base = Path(self.project.corpus_dir) if self.project.corpus_dir else self.data_dir
+        return base / 'pretrain'
+
+    @property
+    def corpus_sft_path(self):
+        base = Path(self.project.corpus_dir) if self.project.corpus_dir else self.data_dir
+        return base / 'sft' / 'sft.jsonl'
 
     @property
     def tokenizer_path(self):
@@ -228,6 +245,7 @@ _SECTION_TYPES = {
     'finetune': FinetuneConfig,
     'eval': EvalConfig,
     'graph': GraphConfig,
+    'scale': ScaleConfig,
     'slurm': SlurmConfig,
 }
 

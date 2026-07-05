@@ -9,9 +9,17 @@ that many single-GPU workers, each generating a disjoint share of the corpus,
 followed by a CPU-only merge job that deduplicates across workers and writes
 the final files. Later stages depend on the merge job.
 
+When the config has a scale section with rungs, the submitter runs the
+progressive scale-world ladder instead of a single chain: generation proceeds
+in cumulative chunks, and as each fraction of the corpus is frozen into a
+snapshot, a rung trains a model on it while the next chunk keeps generating.
+Because smaller corpora are prefixes of larger ones, no data is regenerated
+per rung, and cancelling the pending jobs stops generation early.
+
     python slurm/submit.py --config configs/poc.yaml
     python slurm/submit.py --config configs/poc.yaml --stages pretrain,finetune,evaluate
     python slurm/submit.py --config configs/poc.yaml --dry-run
+    python slurm/submit.py --config configs/scale/world.yaml --dry-run
 """
 
 import argparse
@@ -21,10 +29,14 @@ import subprocess
 import sys
 from pathlib import Path
 
+import yaml
+
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPOSITORY_ROOT / 'src'))
 
 from slm.config import load_config
+
+RUNG_STAGES = ['tokenizer', 'data', 'pretrain', 'finetune', 'evaluate']
 
 ALL_STAGES = [
     'generate', 'tokenizer', 'data', 'pretrain', 'finetune', 'evaluate',
@@ -200,12 +212,141 @@ def submit(config_path, stages, dry_run):
         print('\nAll stages submitted. Track with: squeue -u $USER')
 
 
+def _deep_merge(base, override):
+    """Return base recursively overlaid with override, without mutating either."""
+    result = dict(base)
+    for key, value in override.items():
+        if (key in result and isinstance(result[key], dict)
+                and isinstance(value, dict)):
+            result[key] = _deep_merge(result[key], value)
+        else:
+            result[key] = value
+    return result
+
+
+def _write_rung_config(base_raw, rung, world_out, texts_target, pairs_target,
+                       corpus_dir):
+    """Materialize a rung config that trains on the shared corpus snapshot.
+
+    The rung inherits the world config, overlaid with the rung's own section
+    overrides, and is pointed at its frozen corpus snapshot through
+    project.corpus_dir. Its own out_dir keeps the rung's tokenizer, packed
+    data, checkpoints, and reports separate from every other rung.
+    """
+    overrides = {
+        key: value for key, value in rung.items()
+        if key not in ('name', 'fraction')
+    }
+    merged = _deep_merge(base_raw, overrides)
+    rung_out = world_out / rung['name']
+    project = dict(merged.get('project', {}))
+    project['out_dir'] = str(rung_out)
+    project['corpus_dir'] = str(corpus_dir)
+    merged['project'] = project
+    generate = dict(merged.get('generate', {}))
+    generate['number_of_texts'] = texts_target
+    generate['number_of_pairs'] = pairs_target
+    merged['generate'] = generate
+    slurm = dict(merged.get('slurm', {}))
+    slurm['log_dir'] = str(rung_out / 'slurm_logs')
+    merged['slurm'] = slurm
+    merged.pop('scale', None)
+    rung_out.mkdir(parents=True, exist_ok=True)
+    path = rung_out / 'config.yaml'
+    with open(path, 'w') as handle:
+        yaml.safe_dump(merged, handle, sort_keys=False)
+    return path
+
+
+def submit_world(config_path, dry_run):
+    """Submit a progressive scale ladder that shares one growing corpus.
+
+    Generation runs in cumulative chunks. When a chunk's fraction of the corpus
+    is merged into a frozen snapshot, that rung trains on the snapshot while the
+    next chunk keeps generating from the shared worker directories. Because the
+    chunks are chained and each rung reads its own snapshot, cancelling the
+    pending generation and rung jobs (scancel) halts the expensive generation
+    early once a rung reveals a problem.
+    """
+    config = load_config(config_path)
+    with open(config_path) as handle:
+        raw = yaml.safe_load(handle) or {}
+    base_raw = {key: value for key, value in raw.items() if key != 'scale'}
+    workers = config.generate.workers
+    if workers <= 1:
+        sys.exit('scale-world generation requires generate.workers above 1')
+    rungs = sorted(config.scale.rungs, key=lambda rung: float(rung['fraction']))
+    if not rungs:
+        sys.exit('scale.rungs is empty')
+
+    world_out = Path(config.project.out_dir)
+    full_texts = config.generate.number_of_texts
+    full_pairs = config.generate.number_of_pairs
+
+    previous_merge = None
+    for rung in rungs:
+        name = rung['name']
+        fraction = float(rung['fraction'])
+        texts_target = max(1, round(fraction * full_texts))
+        pairs_target = max(1, round(fraction * full_pairs))
+        corpus_dir = world_out / ('corpus_%s' % name)
+
+        array_sbatch = _sbatch_arguments(
+            config, 'slm-gen-%s' % name, config.slurm.gres
+        )
+        array_sbatch += ['--array', '0-%d' % (workers - 1)]
+        gen_command = (
+            '%s python3 -m slm.generate --config %s --worker-count %d '
+            '--worker-index $SLURM_ARRAY_TASK_ID --max-texts %d --max-pairs %d'
+            % (_command_base(config), config_path, workers, texts_target,
+               pairs_target)
+        )
+        array_job = _submit_job(
+            'gen-%s' % name, array_sbatch, gen_command, previous_merge, dry_run
+        )
+
+        merge_sbatch = _sbatch_arguments(config, 'slm-merge-%s' % name, None)
+        merge_command = (
+            '%s python3 -m slm.generate --config %s --merge --merge-out %s '
+            '--max-texts %d --max-pairs %d'
+            % (_command_base(config), config_path, corpus_dir, texts_target,
+               pairs_target)
+        )
+        merge_job = _submit_job(
+            'merge-%s' % name, merge_sbatch, merge_command, array_job, dry_run
+        )
+        previous_merge = merge_job
+
+        rung_config_path = _write_rung_config(
+            base_raw, rung, world_out, texts_target, pairs_target, corpus_dir
+        )
+        rung_config = load_config(rung_config_path)
+        previous_stage = merge_job
+        for stage in RUNG_STAGES:
+            sbatch = _sbatch_arguments(
+                rung_config, 'slm-%s-%s' % (stage, name),
+                _stage_gres(stage, rung_config),
+            )
+            command = _stage_command(stage, rung_config, str(rung_config_path))
+            previous_stage = _submit_job(
+                '%s-%s' % (stage, name), sbatch, command, previous_stage,
+                dry_run,
+            )
+    if not dry_run:
+        print('\nScale-world submitted. Track with: squeue -u $USER')
+        print('To stop early, scancel the pending gen, merge, and rung jobs.')
+
+
 def main():
     parser = argparse.ArgumentParser(description='Submit pipeline to Slurm')
     parser.add_argument('--config', required=True)
     parser.add_argument('--stages', default=','.join(DEFAULT_STAGES))
     parser.add_argument('--dry-run', action='store_true')
     arguments = parser.parse_args()
+    config = load_config(arguments.config)
+    if config.scale.rungs:
+        submit_world(arguments.config, arguments.dry_run)
+        return
     stages = [stage.strip() for stage in arguments.stages.split(',') if stage.strip()]
     unknown = set(stages) - set(ALL_STAGES)
     if unknown:
