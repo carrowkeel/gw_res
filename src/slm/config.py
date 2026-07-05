@@ -29,6 +29,7 @@ class GenerateConfig:
             'conversation': 1.0,
             'definition': 1.0,
             'description': 1.0,
+            'reasoning': 1.0,
         }
     )
     number_of_texts: int = 100000

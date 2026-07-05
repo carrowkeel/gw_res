@@ -1,28 +1,31 @@
 """Prompt construction for synthetic generation.
 
-Referent stripping is currently relaxed: generation targets a functional,
-knowledgeable prompt-response model for an MVP push, so real facts, named
-entities, numbers, and technical vocabulary are all allowed. The severity
-parameter and its per-severity entity vocabulary remain wired only for prompt
-variety (concrete nouns at s1, category-level phrasing at s2); they no longer
-restrict content. See the intent graph for the referent-free design this
-temporarily sets aside and the plan to reintroduce it through a constructed
-world-state generator rather than through prompt restriction.
+Referent stripping is relaxed: generation targets a functional, knowledgeable
+prompt-response model, so real facts, named entities, numbers, and technical
+vocabulary are all allowed. Generation is deliberately not confined to any one
+subject: every prompt is anchored in a sampled subject domain so the corpus
+ranges over everyday life, work, science, history, the arts, relationships,
+health, technology, and more, rather than repeating a single kind of scene.
 
-Diversity comes from two places. Each prompt samples several independent
-structural axes (tone, form, point of view, length, relation kind, dialogue
-goal), so different requests ask for genuinely different kinds of text rather
-than the same shape with different nouns. Each request is also anchored with one
-exemplar sampled from a rotating pool, so the generator returns only the text
-with no preamble without collapsing onto a single style.
+Each text type also carries a structural demand. Prose asks for a story with
+plot (a character who wants something, is opposed, and reaches an outcome),
+not static observation. The reasoning type asks for genuinely ordered
+explanation or argument (cause before effect, steps in order, reasons by
+weight), so its logic cannot be faked with loose, poetic association.
+Instruction pairs span many real task kinds (explain, how-to, compare, define,
+answer, advise, summarize, rewrite, list, reason), so the model learns to do
+tasks, not only to describe scenes.
 
-The definition type asks for real words to define, so the assistant supplies
-genuine, accurate knowledge.
+Diversity comes from two places. Each prompt samples independent structural
+axes (domain, tone, form, point of view, length, reasoning mode, task kind).
+Each request is also anchored with one exemplar sampled from a rotating pool,
+so the generator returns only the text with no preamble without collapsing
+onto a single style.
 """
 
 from . import seeds
 
-TEXT_TYPES = ['prose', 'conversation', 'definition', 'description']
+TEXT_TYPES = ['prose', 'conversation', 'definition', 'description', 'reasoning']
 
 _BASE_RULES = (
     'You produce serious, well-formed English for training a language model on '
@@ -42,65 +45,92 @@ _BASE_RULES = (
 _BEGIN_DIRECTLY = ' Write only the text, beginning directly, with no preamble.'
 
 _PROSE_EXEMPLARS = [
-    'The near bank had given way since the last high water. What had been a '
-    'firm path was now a run of loose soil, and the reeds that held it were '
-    'bent flat and clogged with silt. Nothing had been done to mend it. '
-    'Further along, where the ground stood higher, the bank held; but the '
-    'crossing that most used was gone, and would stay gone until the water '
-    'fell and someone cut a new one.',
+    'Dornel had covered for the older clerk twice that month and said nothing '
+    'both times. The third time the drawer came up short, the manager asked '
+    'him straight out whether he had seen anything. He understood at once what '
+    'the truth would cost the old man and what the lie would cost himself, and '
+    'he said he had noticed nothing. That night the clerk caught him at the '
+    'gate, pressed a folded note into his hand, and told him he was a fool. '
+    'Dornel kept the note but never spent it, and for the rest of the year he '
+    'counted the drawer twice before anyone else arrived.',
 
-    'At first the pool kept to its bed. Then, over the cold season, the water '
-    'crept outward, taking first the low grass and then the roots of the '
-    'nearer trees. By the time the wind turned warm again the trees stood in '
-    'water to their lower branches, and what had been a meadow answered every '
-    'gust with a dull shifting of the flooded reeds.',
+    'When Sable came back to the town after nine years she expected the bakery '
+    'to be gone, and it was. What she had not expected was that the woman '
+    'behind the new counter would know her name. They had been at school '
+    'together. For a moment neither of them mentioned the money Sable had left '
+    'owing, and then the woman did, lightly, as though it were a joke. Sable '
+    'paid it there in coins and left with bread she did not want, and found on '
+    'the walk back that the debt had been the last thing still tying her to '
+    'the place.',
 ]
 
 _CONVERSATION_EXEMPLARS = [
-    'Neris: You set the snare on the near bank. Nothing crosses there.\n'
-    'Doran: Nothing crosses in daylight. At dusk they come down to drink.\n'
-    'Neris: Then it should sit lower, where the mud is soft, not up in the '
-    'reeds.\n'
-    'Doran: In the mud it fouls with silt by morning and holds nothing.\n'
-    'Neris: Better to clear silt than to catch nothing. Move it down; I will '
-    'watch the upper path.\n'
-    'Doran: Two nights. If it fails two nights running, we do it your way.',
+    'Renn: If we ship both orders on one truck we save the second fee.\n'
+    'Mara: And if the truck is late we lose both customers instead of one.\n'
+    'Renn: The truck has been late once in a year.\n'
+    'Mara: Once was the week we could least afford it. Split them. I would '
+    'rather pay the fee than write two apologies.\n'
+    'Renn: Fine, both split. But the fee comes out of the delivery budget, not '
+    'mine.\n'
+    'Mara: Agreed.',
 
-    'Sable: The far store is yours to carry. I took the near one up the slope '
-    'already.\n'
-    'Renn: The near one is the lighter. You gave yourself the easy load.\n'
-    'Sable: I gave myself the longer climb. Weigh the walk against the weight.\n'
-    'Renn: Fair. Then I take the far store, and you cut the new path while I '
-    'am gone.\n'
-    'Sable: Agreed. Keep to the high ground; the low way is under water.',
+    'Tovin: I did not get the place on the course.\n'
+    'Elsa: You were the strongest applicant they had.\n'
+    'Tovin: The strongest without the fee, it turns out.\n'
+    'Elsa: Then we find the fee. I have some put by.\n'
+    'Tovin: I am not taking your savings for a maybe.\n'
+    'Elsa: It is not a maybe if you go. Take it, and pay it back when you are '
+    'teaching. That was always the plan.',
 ]
 
 _DEFINITION_EXEMPLARS = [
-    'levee: a raised bank built or formed along a river to keep it from '
-    'flooding the land beside it. A levee runs parallel to the channel it '
-    'protects and stands higher than the floodplain behind it.\n'
-    'oxbow: a curved lake formed when a river changes course and cuts off one '
-    'of its bends. An oxbow lies beside the river it was once part of and '
-    'fills slowly with sediment over time.',
+    'interest: a charge paid for the use of borrowed money, set as a share of '
+    'the amount borrowed over a period of time. Interest is owed on top of the '
+    'original sum and grows the longer the sum goes unpaid.\n'
+    'principal: the original amount of money borrowed or invested, apart from '
+    'any interest. The principal is the figure on which interest is '
+    'calculated.',
 
-    'watershed: the whole area of land whose water drains into the same '
-    'river, lake, or sea. A watershed is bounded by higher ground that '
-    'separates it from the watersheds next to it.\n'
-    'tributary: a smaller stream that flows into a larger river rather than '
-    'directly into a lake or the sea. A tributary joins the main channel at a '
-    'point called a confluence.',
+    'artery: a vessel that carries blood away from the heart to the rest of '
+    'the body. An artery has thick, muscular walls that withstand the pressure '
+    'of each heartbeat.\n'
+    'vein: a vessel that carries blood back toward the heart. A vein has '
+    'thinner walls than an artery and contains valves that keep the blood from '
+    'flowing backward.',
 ]
 
 _DESCRIPTION_EXEMPLARS = [
-    'The wood stands on the higher ground, and the marsh lies below it. '
-    'Between them a single bank runs level, drier than the marsh and darker '
-    'than the wood. The marsh reaches farther than the wood but never as high, '
-    'and where the two meet the ground is neither firm nor open water.',
+    'A hand plane is heavier at the front than most people expect, and the '
+    'weight is deliberate. The blade sits at a fixed angle behind the mouth, '
+    'its edge just proud of the sole, and the depth of cut is set by a screw '
+    'beneath the handle. Turned one way the screw brings the edge lower and '
+    'the shaving thickens; turned the other, the cut grows fine enough to see '
+    'through.',
 
-    'There are three pools along the gully. The first is the shallowest and '
-    'the last the deepest. Each lies lower than the one before it, and the '
-    'water moves from the first to the last and no other way. Beyond the last '
-    'pool the gully closes, and past that point nothing drains.',
+    'A market town keeps its trade in the square and its quiet in the streets '
+    'behind it. The stalls nearest the road take the most custom and pay the '
+    'most for the place; those in the corners are cheaper and slower. On '
+    'market days the square is loud from dawn; on other days it is a car park, '
+    'and only the worn stone under the stalls shows where the trade stands.',
+]
+
+_REASONING_EXEMPLARS = [
+    'Bread rises because the yeast in the dough feeds on sugars and gives off '
+    'gas as it does. The gas cannot escape the stretched, elastic network the '
+    'flour forms when it is kneaded, so it collects in small pockets and '
+    'pushes the dough outward. Heat from the oven makes the trapped gas expand '
+    'faster still, and then sets the walls of each pocket firm before they can '
+    'collapse. What began as a dense lump is left full of fixed holes, which '
+    'is why well-made bread is light.',
+
+    'A town gains more from repairing its old bridge than from building a '
+    'second one, for three reasons. First, the repair costs less and can be '
+    'done in stages, so the crossing is never fully closed. Second, one '
+    'well-kept bridge is cheaper to maintain than two that each fall slowly '
+    'into disrepair. Third, a new bridge draws building to the far bank and '
+    'spreads the town thin before it can pay for the services that spread '
+    'demands. The case for a second bridge rests on growth that may not come; '
+    'the case for repair rests on a crossing that is already needed now.',
 ]
 
 _EXEMPLAR_POOLS = {
@@ -108,29 +138,34 @@ _EXEMPLAR_POOLS = {
     'conversation': _CONVERSATION_EXEMPLARS,
     'definition': _DEFINITION_EXEMPLARS,
     'description': _DESCRIPTION_EXEMPLARS,
+    'reasoning': _REASONING_EXEMPLARS,
 }
 
 _EXEMPLAR_INSTRUCTIONS = {
-    'prose': 'Write a short serious passage about a bank and the water below it.',
-    'conversation': 'Write a terse exchange in which two speakers settle who '
-                    'carries which load.',
-    'definition': 'Write dictionary entries defining two real words for '
-                  'features of a river.',
-    'description': 'Write a dry factual description of a wood and a marsh using '
-                   'only relations.',
+    'prose': 'Write a short story in which a clerk must choose between a lie '
+             'that protects a colleague and a truth that protects himself.',
+    'conversation': 'Write a terse exchange in which two colleagues settle how '
+                    'to ship two orders.',
+    'definition': 'Write dictionary entries defining two real financial terms.',
+    'description': 'Write a factual description of how a hand plane works.',
+    'reasoning': 'Explain, in order, why bread rises when it is baked.',
 }
 
 _PAIR_EXEMPLAR = (
-    'Describe how a hill and a stream below it are arranged, using only '
-    'relations.',
-    'The hill rises above the stream, and the stream runs along its foot. The '
-    'near slope is steeper than the far one, and the water is narrower where '
-    'the banks stand closer.',
+    'How does a lock and key work?',
+    'A pin-tumbler lock holds a row of small spring-loaded pins that cross the '
+    'gap between the outer case and the inner plug, jamming the plug so it '
+    'cannot turn. Each pin is cut into two pieces at a different height. When '
+    'the right key is pushed in, its ridges lift every pin so that each cut '
+    'lines up exactly with the gap between the case and the plug. With every '
+    'cut aligned, nothing crosses the gap and the plug is free to turn and '
+    'draw back the bolt. A wrong key lifts the pins to the wrong heights, so '
+    'at least one still crosses the gap and the plug stays locked.',
 )
 
 
 def build_system_prompt():
-    """Return the system prompt shared by every text type and severity."""
+    """Return the system prompt shared by every text type."""
     return _BASE_RULES
 
 
@@ -160,62 +195,72 @@ def pair_example_turns():
     ]
 
 
-def _two_entities(random_generator, severity):
-    entities = seeds.sample_entities(random_generator, severity, 2)
-    return entities[0], entities[1]
-
-
-def _prose_prompt(random_generator, severity):
-    entity_a, entity_b = _two_entities(random_generator, severity)
+def _prose_prompt(random_generator):
+    domain = random_generator.choice(seeds.SUBJECT_DOMAINS)
     return (
-        'Write %s in a %s tone: %s, concerning the %s and the %s, written from '
-        '%s. Be concrete and specific.' % (
+        'Write %s in a %s tone: %s, drawn from %s, told from %s. The story '
+        'must have a plot: a character who wants something, an obstacle or '
+        'opposition, a turning point, and a definite outcome. Give the '
+        'characters names. Be concrete and specific.' % (
             random_generator.choice(seeds.LENGTH_BANDS),
             random_generator.choice(seeds.TONES),
-            random_generator.choice(seeds.PROSE_FORMS),
-            entity_a, entity_b,
+            random_generator.choice(seeds.STORY_SITUATIONS),
+            domain,
             random_generator.choice(seeds.POINTS_OF_VIEW),
         )
     )
 
 
-def _conversation_prompt(random_generator, severity):
+def _conversation_prompt(random_generator):
     name_a = seeds.invented_name(random_generator)
     name_b = seeds.invented_name(random_generator)
+    domain = random_generator.choice(seeds.SUBJECT_DOMAINS)
     return (
-        'Write a %s exchange of several turns in which %s and %s %s. Each turn '
-        'must do work: a proposal, an objection, a reason, or a concession, and '
-        'the exchange must reach a definite outcome. Begin each turn with the '
-        'speaker name and a colon.' % (
-            random_generator.choice(seeds.TONES), name_a, name_b,
+        'Write a %s exchange of several turns, set in the world of %s, in '
+        'which %s and %s %s. Each turn must do work: a proposal, an objection, '
+        'a reason, or a concession, and the exchange must reach a definite '
+        'outcome. Begin each turn with the speaker name and a colon.' % (
+            random_generator.choice(seeds.TONES), domain, name_a, name_b,
             random_generator.choice(seeds.DIALOGUE_GOALS),
         )
     )
 
 
-def _definition_prompt(random_generator, severity):
+def _definition_prompt(random_generator):
     count = random_generator.choice([2, 2, 3])
-    domain = random_generator.choice(seeds.entity_pool(severity))
+    domain = random_generator.choice(seeds.SUBJECT_DOMAINS)
     return (
-        'Write dictionary entries defining %d real words for parts or features '
-        'found in or around %s. Define each in genus-and-differentia form (a '
-        'headword is a kind of thing that has some property), accurately and '
-        'consistently with each other.' % (count, domain)
+        'Write dictionary entries defining %d real terms from %s. Choose terms '
+        'that belong together. Define each in genus-and-differentia form (a '
+        'headword is a kind of thing that has some distinguishing property), '
+        'accurately and consistently with the others.' % (count, domain)
     )
 
 
-def _description_prompt(random_generator, severity):
-    entities = seeds.sample_entities(random_generator, severity, 3)
+def _description_prompt(random_generator):
+    domain = random_generator.choice(seeds.SUBJECT_DOMAINS)
     relation_kinds = random_generator.sample(
         seeds.RELATION_KINDS, random_generator.choice([2, 3])
     )
     return (
-        'Write a %s factual description of the %s, the %s and the %s, using '
-        'mainly %s relations. Use plain declarative sentences, no narrative, '
-        'and no fixed template.' % (
-            random_generator.choice(seeds.TONES),
-            entities[0], entities[1], entities[2],
+        'Write a %s factual description of a real thing, place, or process '
+        'from %s, making its %s relations clear. Use plain declarative '
+        'sentences, no narrative, and no fixed template. Name the subject '
+        'plainly and be accurate.' % (
+            random_generator.choice(seeds.TONES), domain,
             ', '.join(relation_kinds),
+        )
+    )
+
+
+def _reasoning_prompt(random_generator):
+    domain = random_generator.choice(seeds.SUBJECT_DOMAINS)
+    return (
+        'Take a real question, process, or claim from %s and %s. Keep the '
+        'order strict: each sentence should follow from the ones before it, '
+        'and the conclusion should rest on the steps given. Be accurate and '
+        'concrete, not vague or figurative.' % (
+            domain, random_generator.choice(seeds.REASONING_MODES),
         )
     )
 
@@ -225,13 +270,14 @@ _BUILDERS = {
     'conversation': _conversation_prompt,
     'definition': _definition_prompt,
     'description': _description_prompt,
+    'reasoning': _reasoning_prompt,
 }
 
 
-def build_prompt(text_type, random_generator, severity):
-    """Return a user prompt for the given text type and severity."""
+def build_prompt(text_type, random_generator):
+    """Return a user prompt for the given text type."""
     builder = _BUILDERS[text_type]
-    return builder(random_generator, severity) + _BEGIN_DIRECTLY
+    return builder(random_generator) + _BEGIN_DIRECTLY
 
 
 _PAIR_FORMAT = (
@@ -240,40 +286,40 @@ _PAIR_FORMAT = (
     'ASSISTANT: <the response>'
 )
 
+_PAIR_TASKS = [
+    'The user asks the assistant to explain how or why something in %s works, '
+    'and the assistant gives a clear, correctly ordered explanation.',
+    'The user asks the assistant how to do a specific task in %s, and the '
+    'assistant gives ordered, practical steps.',
+    'The user asks the assistant to compare two real things in %s, and the '
+    'assistant lays out the differences and reaches a judgement.',
+    'The user asks the assistant what a real term in %s means, and the '
+    'assistant defines it precisely and gives a short example.',
+    'The user asks the assistant a factual question about %s, and the '
+    'assistant answers directly and correctly.',
+    'The user describes a real situation in %s and asks for advice, and the '
+    'assistant gives specific, reasoned advice.',
+    'The user gives the assistant a short passage about %s and asks for a '
+    'summary, and the assistant summarizes it faithfully.',
+    'The user gives the assistant an awkward sentence about %s and asks to '
+    'rewrite it more clearly, and the assistant rewrites it.',
+    'The user asks the assistant to list and organize things in %s, and the '
+    'assistant gives an organized list with a short reason for the grouping.',
+    'The user poses a small reasoning problem set in %s, and the assistant '
+    'works through it in order to a definite answer.',
+]
 
-def build_pair_prompt(random_generator, severity):
+
+def build_pair_prompt(random_generator):
     """Return a prompt that yields one instruction and response pair."""
-    text_type = random_generator.choice(TEXT_TYPES)
-    if text_type == 'prose':
-        entity_a, entity_b = _two_entities(random_generator, severity)
-        instruction = (
-            'The user asks for a short serious passage in a %s tone concerning '
-            'the %s and the %s, and the assistant writes it.' % (
-                random_generator.choice(seeds.TONES), entity_a, entity_b)
-        )
-    elif text_type == 'conversation':
-        instruction = (
-            'The user asks the assistant to produce a short realistic exchange '
-            'in which two speakers %s, and the assistant does so.'
-            % random_generator.choice(seeds.DIALOGUE_GOALS)
-        )
-    elif text_type == 'definition':
-        domain = random_generator.choice(seeds.entity_pool(severity))
-        instruction = (
-            'The user asks the assistant to define a real word for a feature of '
-            '%s, and the assistant gives a precise, accurate '
-            'genus-and-differentia definition.' % domain
-        )
-    else:
-        entity_a, entity_b = _two_entities(random_generator, severity)
-        instruction = (
-            'The user asks the assistant to describe how the %s and the %s are '
-            'arranged using only relations, and the assistant gives a dry '
-            'description.' % (entity_a, entity_b)
-        )
+    task = random_generator.choice(_PAIR_TASKS)
+    domain = random_generator.choice(seeds.SUBJECT_DOMAINS)
+    instruction = task % domain
     return (
         'Create one instruction and response pair for a helpful, knowledgeable '
-        'assistant. %s%s' % (instruction, _PAIR_FORMAT)
+        'assistant. %s The instruction should read like something a real '
+        'person would ask, and the response should be genuinely helpful and '
+        'correct.%s' % (instruction, _PAIR_FORMAT)
     )
 
 
