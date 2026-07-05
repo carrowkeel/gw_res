@@ -79,11 +79,31 @@ graph and not implemented in this pass.
 
 ## Text types
 
-Implemented in this pass: prose, conversation, definition, description. Each is
-serious and referent-free. The reasoning-oriented types (legal and
+Implemented: prose, conversation, definition, description, and reasoning. Every
+prompt is anchored in a sampled subject domain (everyday life, work, science,
+history, the arts, relationships, health, technology, food, travel, law,
+sport, money, ideas, craft, and the land), so the corpus ranges over real
+subjects instead of a single kind of scene. Each type also carries a
+structural demand:
+
+- **prose**: a story with a plot (a character who wants something, an obstacle,
+  a turning point, an outcome), not static description.
+- **conversation**: a multi-turn exchange in which each turn does work and the
+  exchange reaches a definite outcome.
+- **definition**: real terms defined accurately in genus-and-differentia form.
+- **description**: a factual account of a real thing or process, made clear
+  through stated relations.
+- **reasoning**: strictly ordered explanation or argument (cause before effect,
+  steps in order, reasons by weight), so the logic is real rather than poetic.
+
+Instruction pairs span many task kinds (explain, how-to, compare, define,
+answer, advise, summarize, rewrite, list, reason), each set in a sampled
+domain, so the model learns to perform tasks and not only to describe.
+
+The reasoning-heavy document types that need a stronger generator (legal and
 argumentative dialogue, notation-logic and puzzle documents) and the bounded
-real-domain signal-injection experiment are described in the intent graph as
-deferred work.
+real-domain signal-injection experiment remain described in the intent graph
+as deferred work.
 
 ## Install
 

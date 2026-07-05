@@ -219,7 +219,6 @@ class _ShardWriter:
 def _generate_type(engine, sampling, config, text_type, target, writer, seen,
                    worker_index=0):
     generate_config = config.generate
-    severity = generate_config.severity
     system_prompt = prompts.build_system_prompt()
     random_generator = random.Random(
         config.project.seed
@@ -232,7 +231,7 @@ def _generate_type(engine, sampling, config, text_type, target, writer, seen,
     while kept < target and attempts < maximum_attempts:
         size = min(generate_config.batch_size, (target - kept) * 2 + 1)
         user_prompts = [
-            prompts.build_prompt(text_type, random_generator, severity)
+            prompts.build_prompt(text_type, random_generator)
             for _ in range(size)
         ]
         example_turns = prompts.example_turns(text_type, random_generator)
@@ -326,7 +325,6 @@ def generate_pairs(config, worker_index=0, worker_count=1):
     shortfall. Returns (have, target).
     """
     generate_config = config.generate
-    severity = generate_config.severity
     _, target = _worker_plan(config, worker_index, worker_count)
     output_path = _pairs_path(config, worker_index, worker_count)
     if target == 0:
@@ -352,7 +350,7 @@ def generate_pairs(config, worker_index=0, worker_count=1):
         while kept < target and attempts < maximum_attempts:
             size = min(generate_config.batch_size, (target - kept) * 2 + 1)
             user_prompts = [
-                prompts.build_pair_prompt(random_generator, severity)
+                prompts.build_pair_prompt(random_generator)
                 for _ in range(size)
             ]
             texts = _chat(
