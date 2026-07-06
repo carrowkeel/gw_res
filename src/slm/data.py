@@ -187,19 +187,25 @@ class PackedDataset:
 
 
 def render_pair_example(tokenizer, instruction, response, maximum_length):
-    """Return input ids and labels with the instruction span masked out.
+    """Return input ids and next-token labels with the prompt span masked out.
 
     Uses the same light Question and Answer format as the co-trained
-    instructions, so finetuning reinforces the format the model already learned
-    rather than shifting it, and loss falls only on the answer span.
+    instructions. Labels are the next token at each position, matching the
+    convention the model expects (loss is cross entropy of the logits at
+    position i against the token at position i+1, with no internal shift, the
+    same convention the packed pretraining data follows). Every position that
+    would predict a token inside the prompt is masked with -100, so loss falls
+    only on predicting the answer, starting from predicting its first token
+    given the whole prompt.
     """
     prefix_ids = (
         [tokenizer.bos_id]
         + tokenizer.encode(INSTRUCTION_PREFIX % instruction.strip())
     )
     answer_ids = tokenizer.encode(' ' + response.strip()) + [tokenizer.eos_id]
-    input_ids = prefix_ids + answer_ids
-    labels = [-100] * len(prefix_ids) + answer_ids
+    tokens = prefix_ids + answer_ids
+    input_ids = tokens[:-1]
+    labels = [-100] * (len(prefix_ids) - 1) + answer_ids
     return input_ids[:maximum_length], labels[:maximum_length]
 
 
