@@ -121,6 +121,12 @@ class FinetuneConfig:
     log_interval: int = 10
     checkpoint_interval: int = 500
     maximum_sequence_length: int = 1024
+    loss_mode: str = 'response_only'
+    replay_fraction: float = 0.0
+    validation_fraction: float = 0.0
+    evaluation_interval: int = 0
+    early_stop_patience: int = 0
+    variants: list = field(default_factory=list)
 
 
 @dataclass

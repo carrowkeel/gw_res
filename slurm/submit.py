@@ -167,7 +167,11 @@ def _sbatch_arguments(config, job_name, gres):
 
 def _submit_job(label, sbatch, command, previous_job, dry_run):
     if previous_job:
-        sbatch = sbatch + ['--dependency', 'afterok:%s' % previous_job]
+        if isinstance(previous_job, (list, tuple)):
+            dependency = ':'.join(str(job) for job in previous_job)
+        else:
+            dependency = str(previous_job)
+        sbatch = sbatch + ['--dependency', 'afterok:%s' % dependency]
     sbatch = sbatch + ['--wrap', command]
 
     printable = ' '.join(
@@ -188,15 +192,42 @@ def _submit_job(label, sbatch, command, previous_job, dry_run):
     return job_id
 
 
+def _finetune_variant_names(config):
+    variants = config.finetune.variants
+    return [variant['name'] for variant in variants] if variants else [None]
+
+
+def _submit_finetune(config, config_path, previous_job, dry_run, suffix=''):
+    """Submit one finetune job per variant, all forked from the pretrain step.
+
+    Returns the list of job ids so the evaluate stage can depend on all of
+    them. With no variants configured this is a single baseline finetune job.
+    """
+    gres = _stage_gres('finetune', config)
+    base_command = _stage_command('finetune', config, config_path)
+    jobs = []
+    for name in _finetune_variant_names(config):
+        parts = ['finetune'] + ([suffix] if suffix else []) + (
+            [name] if name is not None else []
+        )
+        label = '-'.join(parts)
+        sbatch = _sbatch_arguments(config, 'slm-%s' % label, gres)
+        command = base_command
+        if name is not None:
+            command = '%s --variant %s' % (command, name)
+        jobs.append(_submit_job(label, sbatch, command, previous_job, dry_run))
+    return jobs
+
+
 def submit(config_path, stages, dry_run):
     config = load_config(config_path)
     previous_job = None
     for stage in stages:
-        sbatch = _sbatch_arguments(
-            config, 'slm-%s' % stage, _stage_gres(stage, config)
-        )
-        command = _stage_command(stage, config, config_path)
         if stage == 'generate' and config.generate.workers > 1:
+            sbatch = _sbatch_arguments(
+                config, 'slm-generate', _stage_gres('generate', config)
+            )
+            command = _stage_command('generate', config, config_path)
             sbatch += ['--array', '0-%d' % (config.generate.workers - 1)]
             array_job = _submit_job(stage, sbatch, command, previous_job, dry_run)
             merge_sbatch = _sbatch_arguments(config, 'slm-generate-merge', None)
@@ -207,6 +238,15 @@ def submit(config_path, stages, dry_run):
                 'generate-merge', merge_sbatch, merge_command, array_job, dry_run
             )
             continue
+        if stage == 'finetune':
+            previous_job = _submit_finetune(
+                config, config_path, previous_job, dry_run
+            )
+            continue
+        sbatch = _sbatch_arguments(
+            config, 'slm-%s' % stage, _stage_gres(stage, config)
+        )
+        command = _stage_command(stage, config, config_path)
         previous_job = _submit_job(stage, sbatch, command, previous_job, dry_run)
     if not dry_run:
         print('\nAll stages submitted. Track with: squeue -u $USER')
@@ -323,6 +363,12 @@ def submit_world(config_path, dry_run):
         rung_config = load_config(rung_config_path)
         previous_stage = merge_job
         for stage in RUNG_STAGES:
+            if stage == 'finetune':
+                previous_stage = _submit_finetune(
+                    rung_config, str(rung_config_path), previous_stage, dry_run,
+                    suffix=name,
+                )
+                continue
             sbatch = _sbatch_arguments(
                 rung_config, 'slm-%s-%s' % (stage, name),
                 _stage_gres(stage, rung_config),

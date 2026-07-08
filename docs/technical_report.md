@@ -117,25 +117,34 @@ the primary mechanism by which the model learns instruction-following
 ordinary tokens in the same training stream as pretraining text, the model
 does not need a second training phase to acquire the Question/Answer format.
 
-### finetune (`src/slm/finetune.py`) -- kept as a default, improved gradually
+### finetune (`src/slm/finetune.py`) -- root-cause bug fixed; now a sweep harness
 
-Continues from the pretrain checkpoint, training on the same pairs and the
-same light format via `PairDataset`, with response-only loss. It is a default
-pipeline stage in both `pipeline.py` and `slurm/submit.py`. It has empirically
-collapsed the model into repetitive, low-grammar output in three independent
-runs even after the redesign that removed role tokens (node 30): an early
-60M-parameter run, the nano scale-ladder run (`report_pretrain` grammar 8.18
-versus `report_sft` grammar 1.7), and a pattern consistent with the same
-collapse in the micro run. **Decision (reversing the earlier
-make-it-opt-in recommendation):** keep finetune as a default and improve it
-gradually. It is cheap relative to data generation, the scale-world runner
-(node 43) exercises it at every rung so each run yields a `report_sft` at
-pico/nano/micro/full, and all the collapse evidence predates the referent
-relaxation and the multi-domain content broadening -- so whether the collapse
-persists on the current corpus is itself an open experiment. Candidate
-improvements to try through this surface: replaying pretraining data during
-finetuning to counter the forgetting that likely drives the collapse, and
-lighter-touch adaptation.
+Continues from the pretrain checkpoint, training on the pairs via `PairDataset`.
+It repeatedly collapsed the model into repetitive, low-grammar output
+(`report_sft` grammar 1.7 versus the pretrain model's 8.18). **Root cause found
+and fixed:** `render_pair_example` built `labels` aligned to the same index as
+the input tokens, but the model computes cross entropy of logits at position i
+against target i with no internal shift (the convention the packed pretraining
+data follows via `targets = data[start+1:]`). The separate finetune stage was
+therefore the only path training a copy objective -- predict the current answer
+token from itself -- which produces exactly the repeated-token collapse, and
+explains why co-trained instruction following (correctly shifted packed path)
+worked while this stage did not. Labels are now next-token targets with the
+prompt span masked in `response_only` mode.
+
+The stage is kept a default and turned into a cheap experiment surface. It
+supports a **variant sweep** (node 44): each variant forks from the same
+pretrain checkpoint and overrides finetune fields, with new knobs `loss_mode`
+(`response_only` / `full_sequence`), `replay_fraction` (draw that fraction of
+training micro-batches from the packed pretraining data to counter forgetting),
+and `validation_fraction` + `early_stop_patience` + `evaluation_interval`
+(hold out pairs, stop on their loss). Variants write to `checkpoints/sft/<name>`
+and evaluate into `report_sft_<name>`; the submitter fans them out in parallel,
+and every scale-world rung runs the whole sweep. With no `finetune.variants`
+a config runs a single finetune to `checkpoints/sft/` as before. The shipped
+`world.yaml` sweep is baseline / replay / early-stopping / full-sequence loss /
+low learning rate. The open question the sweep answers first: whether the bug
+fix alone resolves the collapse, and if not, which knob does.
 
 ### evaluate (`src/slm/evaluate.py`)
 

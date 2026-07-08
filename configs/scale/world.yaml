@@ -69,6 +69,22 @@ finetune:
   compile_model: false
   maximum_sequence_length: 512
   checkpoint_interval: 500
+  loss_mode: response_only
+  replay_fraction: 0.0
+  validation_fraction: 0.0
+  evaluation_interval: 100
+  early_stop_patience: 0
+  variants:
+    - name: baseline
+    - name: replay
+      replay_fraction: 0.5
+    - name: earlystop
+      validation_fraction: 0.05
+      early_stop_patience: 3
+    - name: fullloss
+      loss_mode: full_sequence
+    - name: lowlr
+      learning_rate: 0.000005
 
 eval:
   judge_model: null

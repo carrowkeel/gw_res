@@ -1,14 +1,21 @@
-"""Stage four: supervised finetuning on referent-free instruction pairs.
+"""Stage four: supervised finetuning on instruction pairs.
 
-Loads the best pretrain checkpoint, trains with the response-only loss mask, and
-writes ckpt_last.pt to the finetuning checkpoint directory.
+Loads the pretrain checkpoint and continues training on the generated pairs.
+Labels are next-token targets with the prompt span masked (response_only) or
+unmasked (full_sequence). The stage supports a sweep of variants, each forked
+from the same pretrain checkpoint, so several finetuning approaches can be
+compared cheaply against one pretraining run: pretraining-data replay to
+counter forgetting, validation-based early stopping, the loss mode, and any
+optimization override. Each variant writes to its own checkpoint directory.
 
     python -m slm.finetune --config configs/poc.yaml
+    python -m slm.finetune --config configs/scale/world.yaml --variant replay
 """
 
 import argparse
 import math
 from contextlib import nullcontext
+from dataclasses import replace
 
 import numpy
 
@@ -34,7 +41,7 @@ def _load_pretrained(config, device):
     return model, gpt_config
 
 
-def _save(model, config, gpt_config, step, checkpoint_directory):
+def _save(model, config, gpt_config, step, checkpoint_directory, name):
     import torch
 
     base_model = getattr(model, '_orig_mod', model)
@@ -45,23 +52,71 @@ def _save(model, config, gpt_config, step, checkpoint_directory):
             'model_config': to_dict(config.model),
             'vocabulary_size': gpt_config.vocabulary_size,
         },
-        checkpoint_directory / 'ckpt_last.pt',
+        checkpoint_directory / name,
     )
 
 
-def run(config):
+def _effective_finetune(base_finetune, spec):
+    """Return the base finetune config overlaid with a variant's overrides."""
+    if spec is None:
+        return base_finetune
+    overrides = {key: value for key, value in spec.items() if key != 'name'}
+    return replace(base_finetune, **overrides)
+
+
+def _load_replay_dataset(config, block_size):
+    """Return a packed pretraining sampler for replay, or None if unavailable."""
+    import json
+
+    from .data import PackedDataset
+
+    packed_directory = config.data_dir / 'packed'
+    meta_path = packed_directory / 'meta.json'
+    train_path = packed_directory / 'train.bin'
+    if not (meta_path.exists() and train_path.exists()):
+        logger.warning('no packed pretraining data for replay, disabling replay')
+        return None
+    with open(meta_path) as handle:
+        meta = json.load(handle)
+    return PackedDataset(train_path, meta['dtype'], block_size)
+
+
+def _split_indices(count, validation_fraction, random_generator):
+    order = random_generator.permutation(count).tolist()
+    validation_size = int(count * validation_fraction)
+    return order[validation_size:], order[:validation_size]
+
+
+def _validation_loss(model, dataset, indices, batch_size, device, autocast):
+    import torch
+
+    model.eval()
+    losses = []
+    with torch.no_grad():
+        for start in range(0, len(indices), batch_size):
+            batch_indices = indices[start:start + batch_size]
+            if not batch_indices:
+                continue
+            inputs, targets, _ = dataset.collate(batch_indices, device)
+            with autocast:
+                _, loss = model(inputs, targets)
+            losses.append(loss.item())
+    model.train()
+    return sum(losses) / len(losses) if losses else float('inf')
+
+
+def _train(config, finetune_config, tokenizer, name, checkpoint_directory):
     import torch
 
     from .data import PairDataset
 
-    set_seed(config.project.seed)
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     device_type = 'cuda' if device == 'cuda' else 'cpu'
-    finetune_config = config.finetune
-
-    tokenizer = SyntheticTokenizer(config.tokenizer_path)
     model, gpt_config = _load_pretrained(config, device)
-    dataset = PairDataset(config, tokenizer)
+    dataset = PairDataset(
+        config, tokenizer, finetune_config.loss_mode,
+        finetune_config.maximum_sequence_length,
+    )
 
     precision = {
         'float32': torch.float32,
@@ -75,28 +130,42 @@ def run(config):
     scaler = torch.amp.GradScaler(
         'cuda', enabled=(finetune_config.dtype == 'float16')
     )
-
     if finetune_config.compile_model and device_type == 'cuda':
         model = torch.compile(model)
 
     optimizer = model.configure_optimizers(
-        finetune_config.weight_decay,
-        finetune_config.learning_rate,
-        (0.9, 0.95),
-        device_type,
+        finetune_config.weight_decay, finetune_config.learning_rate,
+        (0.9, 0.95), device_type,
     )
+
+    random_generator = numpy.random.default_rng(config.project.seed)
+    train_indices, validation_indices = _split_indices(
+        dataset.length(), finetune_config.validation_fraction, random_generator
+    )
+    replay = None
+    if finetune_config.replay_fraction > 0.0:
+        replay = _load_replay_dataset(config, gpt_config.block_size)
+    replay_generator = numpy.random.default_rng(config.project.seed + 7)
 
     examples_per_step = (
         finetune_config.batch_size * finetune_config.gradient_accumulation_steps
     )
-    steps_per_epoch = math.ceil(dataset.length() / examples_per_step)
+    steps_per_epoch = max(1, math.ceil(len(train_indices) / examples_per_step))
     total_steps = (
         finetune_config.maximum_steps
         or steps_per_epoch * finetune_config.epochs
     )
     warmup_steps = max(1, int(total_steps * finetune_config.warmup_ratio))
+    early_stopping = (
+        len(validation_indices) > 0 and finetune_config.early_stop_patience > 0
+        and finetune_config.evaluation_interval > 0
+    )
     logger.info(
-        'finetuning: %d examples, %d total steps', dataset.length(), total_steps
+        'finetune variant %s: %d train, %d val examples, %d steps, replay %.2f, '
+        'loss %s, early stop %s',
+        name, len(train_indices), len(validation_indices), total_steps,
+        finetune_config.replay_fraction, finetune_config.loss_mode,
+        early_stopping,
     )
 
     def learning_rate_at(step):
@@ -105,12 +174,10 @@ def run(config):
         progress = (step - warmup_steps) / max(1, total_steps - warmup_steps)
         coefficient = 0.5 * (1.0 + math.cos(math.pi * progress))
         return finetune_config.minimum_learning_rate + coefficient * (
-            finetune_config.learning_rate
-            - finetune_config.minimum_learning_rate
+            finetune_config.learning_rate - finetune_config.minimum_learning_rate
         )
 
-    random_generator = numpy.random.default_rng(config.project.seed)
-    order = random_generator.permutation(dataset.length()).tolist()
+    order = random_generator.permutation(train_indices).tolist()
     cursor = 0
 
     def next_indices(count):
@@ -118,13 +185,14 @@ def run(config):
         chosen = []
         while len(chosen) < count:
             if cursor >= len(order):
-                order = random_generator.permutation(dataset.length()).tolist()
+                order = random_generator.permutation(train_indices).tolist()
                 cursor = 0
             chosen.append(order[cursor])
             cursor += 1
         return chosen
 
-    checkpoint_directory = ensure_directory(config.sft_dir)
+    best_validation = float('inf')
+    patience = 0
     model.train()
     for step in range(total_steps):
         current_learning_rate = learning_rate_at(step)
@@ -133,8 +201,16 @@ def run(config):
         optimizer.zero_grad(set_to_none=True)
         accumulated_loss = 0.0
         for _ in range(finetune_config.gradient_accumulation_steps):
-            indices = next_indices(finetune_config.batch_size)
-            inputs, targets, _ = dataset.collate(indices, device)
+            if replay is not None and (
+                replay_generator.random() < finetune_config.replay_fraction
+            ):
+                inputs, targets = replay.get_batch(
+                    finetune_config.batch_size, device, replay_generator
+                )
+            else:
+                inputs, targets, _ = dataset.collate(
+                    next_indices(finetune_config.batch_size), device
+                )
             with autocast:
                 _, loss = model(inputs, targets)
                 loss = loss / finetune_config.gradient_accumulation_steps
@@ -150,22 +226,75 @@ def run(config):
 
         if step % finetune_config.log_interval == 0:
             logger.info(
-                'finetune step %d/%d  loss %.4f  lr %.2e',
-                step, total_steps, accumulated_loss, current_learning_rate,
+                'finetune %s step %d/%d  loss %.4f  lr %.2e',
+                name, step, total_steps, accumulated_loss, current_learning_rate,
             )
-        if step > 0 and step % finetune_config.checkpoint_interval == 0:
-            _save(model, config, gpt_config, step, checkpoint_directory)
+        if early_stopping and step > 0 and (
+            step % finetune_config.evaluation_interval == 0
+        ):
+            validation_loss = _validation_loss(
+                model, dataset, validation_indices, finetune_config.batch_size,
+                device, autocast,
+            )
+            logger.info(
+                'finetune %s step %d  val loss %.4f (best %.4f)',
+                name, step, validation_loss, best_validation,
+            )
+            if validation_loss < best_validation:
+                best_validation = validation_loss
+                patience = 0
+                _save(
+                    model, config, gpt_config, step, checkpoint_directory,
+                    'ckpt_best.pt',
+                )
+            else:
+                patience += 1
+                if patience >= finetune_config.early_stop_patience:
+                    logger.info('finetune %s early stopping at step %d', name, step)
+                    break
 
-    _save(model, config, gpt_config, total_steps, checkpoint_directory)
-    logger.info('finetuning complete -> %s', checkpoint_directory / 'ckpt_last.pt')
-    return checkpoint_directory / 'ckpt_last.pt'
+    _save(model, config, gpt_config, total_steps, checkpoint_directory,
+          'ckpt_last.pt')
+    logger.info('finetune variant %s complete -> %s', name, checkpoint_directory)
+    del model
+
+
+def _variant_output_dir(config, spec):
+    if spec is None:
+        return ensure_directory(config.sft_dir)
+    return ensure_directory(config.sft_dir / spec['name'])
+
+
+def run(config, variant_name=None):
+    """Run one finetune variant, or every configured variant in sequence."""
+    set_seed(config.project.seed)
+    tokenizer = SyntheticTokenizer(config.tokenizer_path)
+    variants = config.finetune.variants
+    if not variants:
+        _train(
+            config, config.finetune, tokenizer, 'sft',
+            _variant_output_dir(config, None),
+        )
+        return
+    selected = variants
+    if variant_name is not None:
+        selected = [spec for spec in variants if spec['name'] == variant_name]
+        if not selected:
+            raise SystemExit('unknown finetune variant %r' % variant_name)
+    for spec in selected:
+        finetune_config = _effective_finetune(config.finetune, spec)
+        _train(
+            config, finetune_config, tokenizer, spec['name'],
+            _variant_output_dir(config, spec),
+        )
 
 
 def main():
     parser = argparse.ArgumentParser(description='Supervised finetuning')
     parser.add_argument('--config', required=True)
+    parser.add_argument('--variant', default=None)
     arguments = parser.parse_args()
-    run(load_config(arguments.config))
+    run(load_config(arguments.config), arguments.variant)
 
 
 if __name__ == '__main__':

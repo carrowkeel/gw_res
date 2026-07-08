@@ -186,17 +186,20 @@ class PackedDataset:
         return inputs, targets
 
 
-def render_pair_example(tokenizer, instruction, response, maximum_length):
-    """Return input ids and next-token labels with the prompt span masked out.
+def render_pair_example(tokenizer, instruction, response, maximum_length,
+                        loss_mode='response_only'):
+    """Return input ids and next-token labels for one instruction pair.
 
     Uses the same light Question and Answer format as the co-trained
     instructions. Labels are the next token at each position, matching the
     convention the model expects (loss is cross entropy of the logits at
     position i against the token at position i+1, with no internal shift, the
-    same convention the packed pretraining data follows). Every position that
-    would predict a token inside the prompt is masked with -100, so loss falls
-    only on predicting the answer, starting from predicting its first token
-    given the whole prompt.
+    same convention the packed pretraining data follows). In the default
+    response_only mode every position that would predict a token inside the
+    prompt is masked with -100, so loss falls only on predicting the answer,
+    starting from predicting its first token given the whole prompt. In
+    full_sequence mode no position is masked, so the model is trained to
+    predict the prompt tokens as well, the same objective as pretraining.
     """
     prefix_ids = (
         [tokenizer.bos_id]
@@ -205,18 +208,29 @@ def render_pair_example(tokenizer, instruction, response, maximum_length):
     answer_ids = tokenizer.encode(' ' + response.strip()) + [tokenizer.eos_id]
     tokens = prefix_ids + answer_ids
     input_ids = tokens[:-1]
-    labels = [-100] * (len(prefix_ids) - 1) + answer_ids
+    if loss_mode == 'full_sequence':
+        labels = tokens[1:]
+    else:
+        labels = [-100] * (len(prefix_ids) - 1) + answer_ids
     return input_ids[:maximum_length], labels[:maximum_length]
 
 
 class PairDataset:
-    """Supervised finetuning examples with response-only loss masks."""
+    """Supervised finetuning examples with next-token labels.
 
-    def __init__(self, config, tokenizer):
+    loss_mode selects response_only masking (loss on the answer only) or
+    full_sequence (loss on every token). maximum_length and the loss mode
+    default to the base finetune config but can be overridden per variant.
+    """
+
+    def __init__(self, config, tokenizer, loss_mode=None, maximum_length=None):
         self.examples = []
         self.pad_id = tokenizer.pad_id
         path = config.corpus_sft_path
-        maximum_length = config.finetune.maximum_sequence_length
+        if maximum_length is None:
+            maximum_length = config.finetune.maximum_sequence_length
+        if loss_mode is None:
+            loss_mode = config.finetune.loss_mode
         with open(path) as handle:
             for line in handle:
                 stripped = line.strip()
@@ -229,6 +243,7 @@ class PairDataset:
                         record['prompt'],
                         record['response'],
                         maximum_length,
+                        loss_mode,
                     )
                 )
         logger.info('loaded %d finetuning examples', len(self.examples))

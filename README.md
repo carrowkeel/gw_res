@@ -38,10 +38,22 @@ pretraining: the generated prompt and response pairs are rendered in a light
 format (`Question: ... Answer: ...`) and mixed into the pretraining corpus at
 `pretrain.instruction_fraction` of the tokens, so the base model already follows
 instructions. The finetune stage then continues training on those same pairs in
-the same format with a response-only loss, sharpening instruction following
-without shifting the format that would otherwise collapse a small model.
-Evaluation covers both models, writing `report_pretrain` and `report_sft`, so
-the effect of finetuning is visible.
+the same format, computing loss on next-token targets with the prompt span
+masked (`loss_mode: response_only`), sharpening instruction following.
+Evaluation covers the base model and each finetune variant, writing
+`report_pretrain` and one `report_sft` (or `report_sft_<variant>` per variant),
+so the effect of finetuning is visible.
+
+The finetune stage supports a sweep of variants, each forked from the same
+pretrain checkpoint, so several approaches can be compared cheaply against one
+pretraining run. A variant is a `{name, ...overrides}` entry under
+`finetune.variants`, and the knobs are `loss_mode` (`response_only` or
+`full_sequence`), `replay_fraction` (mix that fraction of pretraining batches in
+to counter forgetting), `validation_fraction` with `early_stop_patience` and
+`evaluation_interval` (stop on held-out pair loss), and any optimization field
+(`learning_rate`, `epochs`, ...). With no variants a config runs a single
+finetune to `checkpoints/sft/`, as before; with variants each writes to
+`checkpoints/sft/<name>/` and the submitter fans them out in parallel.
 
 ## Referent-free design
 
@@ -271,11 +283,13 @@ scancel --name slm-gen-nano --name slm-merge-nano   # and later rung jobs
 
 Each rung writes its own tokenizer, packed data, checkpoints, and evaluation
 reports under `runs/world/<rung>/`; the submitter materializes each rung's
-resolved config there. Since every rung runs finetune and evaluates both the
-pretrained and finetuned checkpoints, one ladder yields a `report_sft` at every
-scale, which is the cheap, repeated signal used to iterate on the finetuning
-stage. The pretrain log prints `tokens per non-embedding parameter` per rung so
-the size ratio stays visible.
+resolved config there. `world.yaml` also defines a `finetune.variants` sweep
+(baseline, replay, early-stopping, full-sequence loss, low learning rate), so
+every rung runs all variants against its one pretrain checkpoint and evaluates
+each, yielding a `report_sft_<variant>` at every scale. That is the cheap,
+repeated signal used to iterate on the finetuning stage across both model size
+and approach in a single run. The pretrain log prints
+`tokens per non-embedding parameter` per rung so the size ratio stays visible.
 
 ## Graph-context pipeline (experimental)
 
