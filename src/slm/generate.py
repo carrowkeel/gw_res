@@ -433,13 +433,18 @@ def _collect_worker_output(config, worker_count):
     return shard_paths, pair_paths, shortfalls
 
 
-def merge_workers(config):
+def merge_workers(config, output_base=None):
     """Combine worker outputs into the files downstream stages read.
 
     Refuses to merge unless every worker has produced its full share, so a
     failed or short worker fails the merge with a message naming what is
     missing rather than silently yielding a short corpus. Deduplicates across
     workers, since each worker only deduplicates against its own output.
+
+    output_base directs the merged corpus to a location other than the run
+    data directory, used by the scale-world runner to freeze a cumulative
+    snapshot per rung while later generation chunks keep appending to the
+    shared worker directories.
     """
     generate_config = config.generate
     worker_count = generate_config.workers
@@ -456,7 +461,8 @@ def merge_workers(config):
             % '; '.join(shortfalls)
         )
 
-    output_directory = ensure_directory(config.data_dir / 'pretrain')
+    destination = output_base if output_base is not None else config.data_dir
+    output_directory = ensure_directory(destination / 'pretrain')
     for stale in output_directory.glob('shard_*.jsonl'):
         stale.unlink()
     writer = _ShardWriter(output_directory)
@@ -474,7 +480,7 @@ def merge_workers(config):
         worker_count, writer.total, generate_config.number_of_texts,
     )
 
-    sft_directory = ensure_directory(config.data_dir / 'sft')
+    sft_directory = ensure_directory(destination / 'sft')
     seen = set()
     kept = 0
     with open(sft_directory / 'sft.jsonl', 'w') as handle:
@@ -550,10 +556,20 @@ def main():
     parser.add_argument('--worker-index', type=int, default=0)
     parser.add_argument('--worker-count', type=int, default=1)
     parser.add_argument('--merge', action='store_true')
+    parser.add_argument('--merge-out', default=None)
+    parser.add_argument('--max-texts', type=int, default=None)
+    parser.add_argument('--max-pairs', type=int, default=None)
     arguments = parser.parse_args()
     config = load_config(arguments.config)
+    if arguments.max_texts is not None:
+        config.generate.number_of_texts = arguments.max_texts
+    if arguments.max_pairs is not None:
+        config.generate.number_of_pairs = arguments.max_pairs
     if arguments.merge:
-        merge_workers(config)
+        from pathlib import Path
+
+        output_base = Path(arguments.merge_out) if arguments.merge_out else None
+        merge_workers(config, output_base)
         return
     if not 0 <= arguments.worker_index < arguments.worker_count:
         raise SystemExit(

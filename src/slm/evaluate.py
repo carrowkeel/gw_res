@@ -9,7 +9,7 @@ mixed-in Question and Answer text). A small real-world knowledge probe is kept
 but demoted: a tiny model answers such out-of-distribution questions poorly, so
 those scores are unreliable and labelled as such.
 
-    python -m slm.evaluate --config configs/scale/s1_nano.yaml
+    python -m slm.evaluate --config runs/world/pico/config.yaml
 """
 
 import argparse
@@ -271,17 +271,31 @@ def write_report(config, report):
     logger.info('wrote evaluation report to %s', report_path)
 
 
-def _checkpoint_for(config, stage):
-    base = config.sft_dir if stage == 'sft' else config.pretrain_dir
+def _find_checkpoint(base):
     for name in ('ckpt_best.pt', 'ckpt_last.pt'):
         if (base / name).exists():
             return base / name
     return None
 
 
-def run(config, stage='pretrain'):
+def _sft_targets(config):
+    """Return (report label, checkpoint directory) for each finetune variant."""
+    variants = config.finetune.variants
+    if not variants:
+        return [('sft', config.sft_dir)]
+    return [
+        ('sft_%s' % variant['name'], config.sft_dir / variant['name'])
+        for variant in variants
+    ]
+
+
+def run(config, stage='pretrain', checkpoint_dir=None):
     set_seed(config.project.seed)
-    checkpoint_path = _checkpoint_for(config, stage)
+    if checkpoint_dir is None:
+        checkpoint_dir = (
+            config.pretrain_dir if stage == 'pretrain' else config.sft_dir
+        )
+    checkpoint_path = _find_checkpoint(checkpoint_dir)
     if checkpoint_path is None:
         logger.info('no %s checkpoint found, skipping', stage)
         return None
@@ -301,12 +315,15 @@ def run(config, stage='pretrain'):
 
 
 def run_all(config):
-    """Evaluate the pretrained model and the finetuned model when present."""
+    """Evaluate the pretrained model and every finetune variant when present."""
     reports = {}
-    for stage in ('pretrain', 'sft'):
-        report = run(config, stage)
+    report = run(config, 'pretrain', config.pretrain_dir)
+    if report is not None:
+        reports['pretrain'] = report
+    for label, checkpoint_dir in _sft_targets(config):
+        report = run(config, label, checkpoint_dir)
         if report is not None:
-            reports[stage] = report
+            reports[label] = report
     return reports
 
 
@@ -318,10 +335,13 @@ def main():
     )
     arguments = parser.parse_args()
     config = load_config(arguments.config)
-    if arguments.stage == 'both':
-        run_all(config)
+    if arguments.stage == 'pretrain':
+        run(config, 'pretrain', config.pretrain_dir)
+    elif arguments.stage == 'sft':
+        for label, checkpoint_dir in _sft_targets(config):
+            run(config, label, checkpoint_dir)
     else:
-        run(config, arguments.stage)
+        run_all(config)
 
 
 if __name__ == '__main__':

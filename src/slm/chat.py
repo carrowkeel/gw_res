@@ -6,8 +6,8 @@ completion style; the sft checkpoint answers in the Question and Answer framing.
 Sampling settings are adjustable at runtime with slash commands, and the model
 can be switched between stages in place.
 
-    python -m slm.chat --config configs/scale/s1_nano.yaml
-    python -m slm.chat --config configs/scale/s1_nano.yaml --stage sft --penalty 1.3
+    python -m slm.chat --config runs/world/pico/config.yaml
+    python -m slm.chat --config runs/world/pico/config.yaml --stage sft --penalty 1.3
 """
 
 import argparse

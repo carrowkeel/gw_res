@@ -1,6 +1,6 @@
 project:
-  name: scale-nano
-  out_dir: runs/scale/nano
+  name: scale-world
+  out_dir: runs/world
   seed: 1337
 
 generate:
@@ -13,13 +13,13 @@ generate:
     definition: 1.0
     description: 1.0
     reasoning: 1.0
-  number_of_texts: 300000
-  number_of_pairs: 20000
+  number_of_texts: 1000000
+  number_of_pairs: 50000
   temperature: 1.0
   top_p: 0.95
   frequency_penalty: 0.4
   max_tokens: 512
-  workers: 8
+  workers: 16
   tensor_parallel_size: 1
   gpu_memory_utilization: 0.90
   max_model_len: 2048
@@ -34,18 +34,18 @@ tokenizer:
   minimum_frequency: 2
 
 model:
-  preset: nano
+  preset: micro
   block_size: 512
   dropout: 0.1
   tie_embeddings: true
 
 pretrain:
-  batch_size: 48
+  batch_size: 32
   gradient_accumulation_steps: 8
-  maximum_steps: 8000
+  maximum_steps: 20000
   learning_rate: 0.0006
   minimum_learning_rate: 0.00006
-  warmup_steps: 300
+  warmup_steps: 400
   weight_decay: 0.1
   gradient_clip: 1.0
   dtype: bfloat16
@@ -59,7 +59,7 @@ pretrain:
   instruction_fraction: 0.1
 
 finetune:
-  batch_size: 24
+  batch_size: 16
   gradient_accumulation_steps: 2
   epochs: 2
   learning_rate: 0.00002
@@ -69,6 +69,22 @@ finetune:
   compile_model: false
   maximum_sequence_length: 512
   checkpoint_interval: 500
+  loss_mode: response_only
+  replay_fraction: 0.0
+  validation_fraction: 0.0
+  evaluation_interval: 100
+  early_stop_patience: 0
+  variants:
+    - name: baseline
+    - name: replay
+      replay_fraction: 0.5
+    - name: earlystop
+      validation_fraction: 0.05
+      early_stop_patience: 3
+    - name: fullloss
+      loss_mode: full_sequence
+    - name: lowlr
+      learning_rate: 0.000005
 
 eval:
   judge_model: null
@@ -81,6 +97,52 @@ eval:
   student_gpu_memory_utilization: 0.45
   judge_gpu_memory_utilization: 0.45
 
+scale:
+  rungs:
+    - name: pico
+      fraction: 0.10
+      tokenizer:
+        vocabulary_size: 4000
+      model:
+        preset: pico
+        dropout: 0.15
+      pretrain:
+        maximum_steps: 5000
+        gradient_accumulation_steps: 4
+        warmup_steps: 150
+        evaluation_interval: 100
+        checkpoint_interval: 250
+    - name: nano
+      fraction: 0.25
+      tokenizer:
+        vocabulary_size: 6000
+      model:
+        preset: nano
+        dropout: 0.1
+      pretrain:
+        maximum_steps: 10000
+        gradient_accumulation_steps: 4
+        warmup_steps: 250
+        evaluation_interval: 150
+        checkpoint_interval: 500
+    - name: micro
+      fraction: 0.50
+      tokenizer:
+        vocabulary_size: 8000
+      model:
+        preset: micro
+        dropout: 0.1
+      pretrain:
+        maximum_steps: 16000
+        warmup_steps: 350
+    - name: full
+      fraction: 1.00
+      tokenizer:
+        vocabulary_size: 8000
+      model:
+        preset: micro
+        dropout: 0.1
+
 slurm:
   enabled: true
   partition: null
@@ -90,5 +152,5 @@ slurm:
   cpus_per_task: 8
   time_limit: "24:00:00"
   pretrain_gres: null
-  log_dir: runs/scale/nano/slurm_logs
+  log_dir: runs/world/slurm_logs
   extra_sbatch: []

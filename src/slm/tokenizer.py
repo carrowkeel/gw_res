@@ -18,14 +18,14 @@ logger = get_logger('tokenizer')
 
 def iterate_corpus_texts(config):
     """Yield every pretraining and finetuning text used to train the tokenizer."""
-    pretrain_directory = config.data_dir / 'pretrain'
+    pretrain_directory = config.corpus_pretrain_dir
     for shard in sorted(pretrain_directory.glob('shard_*.jsonl')):
         with open(shard) as handle:
             for line in handle:
                 stripped = line.strip()
                 if stripped:
                     yield json.loads(stripped)['text']
-    pairs_path = config.data_dir / 'sft' / 'sft.jsonl'
+    pairs_path = config.corpus_sft_path
     if pairs_path.exists():
         from .data import render_instruction
 
