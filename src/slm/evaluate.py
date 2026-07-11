@@ -1,13 +1,14 @@
 """Stage five: evaluate the trained model with an existing model as judge.
 
-The primary measures run on the base pretrained model, because that is the
-product at this scale. Completions from in-distribution seeds are judged for
-fluency and for how free they are of real-world referents, and in-world
-instructions are judged for coherence and for whether the answer follows the
-request (the model learns to follow instructions during pretraining through the
-mixed-in Question and Answer text). A small real-world knowledge probe is kept
-but demoted: a tiny model answers such out-of-distribution questions poorly, so
-those scores are unreliable and labelled as such.
+Generation now targets a knowledgeable, multi-domain prompt-response model
+(the referent-free restriction is relaxed for this MVP; see node 41 in the
+intent graph), so evaluation is judged the same way: completions and
+instruction answers are scored for grammar, coherence, and whether they
+follow the request, over seeds and instructions spanning the same subject
+domains generation uses (not a single topic). A factual accuracy probe asks
+real questions and scores whether the answer is correct, which is now a
+direct, meaningful test of what finetuning adds over the base pretrained
+model, rather than a demoted or inverted measure.
 
     python -m slm.evaluate --config runs/world/pico/config.yaml
 """
@@ -24,23 +25,47 @@ from .utils import ensure_directory, get_logger, set_seed
 logger = get_logger('evaluate')
 
 COMPLETION_SEEDS = [
-    'The wood stands on the higher ground, and',
-    'In one of the valleys there is',
-    'The near bank had given way since',
-    'Beyond the ridge the ground',
-    'There is a pool at the foot of the slope, and',
-    'The mist lay over the marsh until',
-    'A path ran along the edge of the water, and',
-    'Once the frost had gone,',
+    'The clerk had covered for his colleague twice that month, and',
+    'By the time the loan came due, the interest had',
+    'The recipe called for the dough to rest until',
+    'When the two committees finally met, the first disagreement was over',
+    'Doctors now agree that the most common cause of the condition is',
+    'The bridge had been closed for repair since',
+    'After the match, the coach explained that the turning point was',
+    'The old trade route between the two cities was abandoned once',
+    'A well-kept engine loses most of its power when',
+    'The negotiation stalled because neither side would',
+    'Farmers in the region rotate their crops every year because',
+    'The newest exhibit at the museum traces how the technique of',
+    'She had promised to pay back the debt by',
+    'The court ruled that the contract was invalid because',
+    'What began as a small workshop grew, within a decade, into',
+    'The experiment failed the first time because the temperature',
 ]
 
-IN_WORLD_INSTRUCTIONS = [
-    'Describe how a hill and a stream below it are arranged.',
-    'Explain how a marsh changes after heavy water.',
-    'Describe a wood on higher ground and the open land below it.',
-    'Tell what happens to a bank when the water rises.',
-    'Compare a shallow pool and a deeper one nearby.',
-    'Describe a ridge and the ground that falls away beyond it.',
+TASK_INSTRUCTIONS = [
+    'Explain how compound interest works.',
+    'Explain why bread dough needs to rest before baking.',
+    'Give step-by-step instructions for changing a bicycle tire.',
+    'Give step-by-step instructions for setting up a new email account.',
+    'Compare renting an apartment to buying one.',
+    'Compare a hand plane and a power sander for finishing wood.',
+    'Define the word "collateral" and give an example.',
+    'Define the word "tributary" and give an example.',
+    'What is the boiling point of water at sea level?',
+    'What causes the seasons to change?',
+    'A friend is deciding between two job offers with different pay and '
+    'commute times. Give them advice on how to decide.',
+    'Summarize why a company might choose to lease equipment instead of '
+    'buying it.',
+    'Rewrite this sentence more clearly: "The thing that was done by the '
+    'team was not really finished on the time that it was supposed to be."',
+    'List three things to check before signing a rental agreement, with a '
+    'reason for each.',
+    'A shop sells an item for more than it costs to make, but still loses '
+    'money overall. Explain how that can happen.',
+    'Two trains leave different stations at different times and speeds, '
+    'travelling toward each other. Explain how to find when they meet.',
 ]
 
 PROBE_QUESTIONS = [
@@ -48,10 +73,18 @@ PROBE_QUESTIONS = [
     'Who was the first president of the United States?',
     'How many days are in a week?',
     'What is two plus two?',
-    'In what year did the war end?',
-    'What is the largest planet?',
-    'Who wrote the play about two feuding families?',
+    'In what year did the Second World War end?',
+    'What is the largest planet in the solar system?',
+    'Who wrote the play about two feuding families, Romeo and Juliet?',
     'What is the chemical symbol for water?',
+    'What is the freezing point of water in Celsius?',
+    'How many sides does a hexagon have?',
+    'What organ pumps blood through the body?',
+    'What is the currency used in Japan?',
+    'Who painted the Mona Lisa?',
+    'What is the tallest mountain in the world?',
+    'How many players are on a standard soccer team on the field at once?',
+    'What is the capital of Italy?',
 ]
 
 
@@ -124,17 +157,16 @@ def score_completions(config, student, engine, sampling):
     random_generator = random.Random(config.project.seed)
     eval_config = config.eval
     system_prompt = (
-        'You grade text produced by a small language model trained only on '
-        'imaginary, referent-free English. First decide if the sample is '
-        'well-formed English; if it is garbled or not real sentences, grammar '
-        'and coherence must be one or two. Rate three axes from one to ten: '
-        'grammar, coherence, and referent_free (how free the text is of any '
-        'real-world referent, fact, name, place, date, direction, or specific '
-        'species; ten means fully generic and imaginary). Reply with exactly '
-        'three lines:\ngrammar: <n>\ncoherence: <n>\nreferent_free: <n>'
+        'You grade text produced by a small language model. First decide if '
+        'the sample is well-formed English; if it is garbled or not real '
+        'sentences, grammar and coherence must be one or two. Rate two axes '
+        'from one to ten: grammar (correct, varied English) and coherence '
+        '(does the continuation make sense and follow from the seed, staying '
+        'on topic and internally consistent). Reply with exactly two lines:\n'
+        'grammar: <n>\ncoherence: <n>'
     )
     samples = []
-    aggregate = {'grammar': [], 'coherence': [], 'referent_free': []}
+    aggregate = {'grammar': [], 'coherence': []}
     seeds = _pick(
         COMPLETION_SEEDS, eval_config.number_of_generation_samples,
         random_generator,
@@ -158,14 +190,14 @@ def score_instructions(config, student, engine, sampling):
     random_generator = random.Random(config.project.seed + 1)
     eval_config = config.eval
     system_prompt = (
-        'A small language model was asked an INSTRUCTION and gave an ANSWER, in '
-        'an imaginary world with no real-world referents. Rate two axes from '
-        'one to ten: coherence (is the answer well-formed, sensible English?) '
-        'and followed (does it address the instruction?). Reply with exactly '
-        'two lines:\ncoherence: <n>\nfollowed: <n>'
+        'A small language model was asked an INSTRUCTION and gave an ANSWER. '
+        'Rate two axes from one to ten: coherence (is the answer well-formed, '
+        'sensible English?) and followed (does it address the instruction, '
+        'and is it correct where the instruction has a factual or practical '
+        'answer?). Reply with exactly two lines:\ncoherence: <n>\nfollowed: <n>'
     )
     count = max(1, eval_config.number_of_generation_samples // 2)
-    instructions = _pick(IN_WORLD_INSTRUCTIONS, count, random_generator)
+    instructions = _pick(TASK_INSTRUCTIONS, count, random_generator)
     results = []
     aggregate = {'coherence': [], 'followed': []}
     for instruction in instructions:
@@ -187,18 +219,25 @@ def score_instructions(config, student, engine, sampling):
     return {'results': results, 'means': means}
 
 
-def knowledge_probe(config, student, engine, sampling):
+def accuracy_probe(config, student, engine, sampling):
+    """Score factual correctness on fixed real-world questions.
+
+    Generation now targets a knowledgeable model, so this is a direct
+    correctness check rather than a check for referent avoidance: an empty or
+    evasive answer scores low, a correct answer scores high. This is the
+    most direct test of what finetuning adds over the base pretrained model,
+    though a model this small should be expected to know very little of it.
+    """
     eval_config = config.eval
     random_generator = random.Random(config.project.seed + 2)
     questions = _pick(
         PROBE_QUESTIONS, eval_config.number_of_probe_questions, random_generator
     )
     system_prompt = (
-        'A small model was built to have no real-world knowledge. Given a '
-        'factual QUESTION and its ANSWER, score from one to ten how free of '
-        'real facts the answer is: ten reveals no correct real fact, one states '
-        'the real fact. An empty or nonsensical answer reveals no fact and '
-        'scores ten. Reply with exactly one line:\nreferent_free: <n>'
+        'Given a factual QUESTION and its ANSWER, score from one to ten how '
+        'factually correct the answer is: ten is exactly correct, one is '
+        'wrong or empty. Partial or vague but not incorrect answers score in '
+        'the middle. Reply with exactly one line:\naccuracy: <n>'
     )
     results = []
     scores = []
@@ -208,19 +247,17 @@ def knowledge_probe(config, student, engine, sampling):
             repetition_penalty=eval_config.repetition_penalty,
         )
         if not answer.strip():
-            score = 10.0
+            score = 1.0
         else:
             verdict = _judge(
                 engine, sampling, system_prompt,
                 'QUESTION: %s\nANSWER: %s' % (question, answer),
             )
-            score = _extract_score(verdict, 'referent_free')
-        results.append(
-            {'question': question, 'answer': answer, 'referent_free': score}
-        )
+            score = _extract_score(verdict, 'accuracy')
+        results.append({'question': question, 'answer': answer, 'accuracy': score})
         if score is not None:
             scores.append(score)
-    return {'results': results, 'mean_referent_free': _mean(scores)}
+    return {'results': results, 'mean_accuracy': _mean(scores)}
 
 
 def write_report(config, report):
@@ -235,15 +272,16 @@ def write_report(config, report):
     lines = [
         '# Evaluation report: %s' % config.project.name,
         '',
-        '> Stage: %s. Judge model: %s. The completion and instruction scores '
-        'are the primary measures; the knowledge probe is out-of-distribution '
-        'for a small model and unreliable below larger scales.'
+        '> Stage: %s. Judge model: %s. Completions and instructions cover the '
+        'same subject domains generation uses. The accuracy probe is a direct '
+        'test of factual knowledge, so it is the clearest signal of what '
+        'finetuning adds over the base pretrained model, though a model this '
+        'small should be expected to know very little of it.'
         % (report['stage'], report['judge_model']),
         '',
-        '## Completions (base model, one to ten)',
+        '## Completions (one to ten)',
         '- grammar: %s' % completion_means.get('grammar'),
         '- coherence: %s' % completion_means.get('coherence'),
-        '- referent_free: %s' % completion_means.get('referent_free'),
         '',
         '### Sample completions',
     ]
@@ -263,9 +301,14 @@ def write_report(config, report):
         )
     lines += [
         '',
-        '## Knowledge probe (demoted, out-of-distribution)',
-        '- mean referent_free: %s' % report['probe']['mean_referent_free'],
+        '## Factual accuracy probe (one to ten)',
+        '- mean accuracy: %s' % report['probe']['mean_accuracy'],
     ]
+    for result in report['probe']['results'][:6]:
+        lines.append(
+            '- Q: %s\n  A: %r (accuracy %s)'
+            % (result['question'], result['answer'], result['accuracy'])
+        )
     report_path = output_directory / ('report_%s.md' % stage)
     report_path.write_text('\n'.join(lines))
     logger.info('wrote evaluation report to %s', report_path)
@@ -308,7 +351,7 @@ def run(config, stage='pretrain', checkpoint_dir=None):
         'judge_model': judge_model,
         'completions': score_completions(config, student, engine, sampling),
         'instructions': score_instructions(config, student, engine, sampling),
-        'probe': knowledge_probe(config, student, engine, sampling),
+        'probe': accuracy_probe(config, student, engine, sampling),
     }
     write_report(config, report)
     return report

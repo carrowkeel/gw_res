@@ -148,21 +148,29 @@ fix alone resolves the collapse, and if not, which knob does.
 
 ### evaluate (`src/slm/evaluate.py`)
 
-`run_all(config)` evaluates the pretrain checkpoint and, if present, the sft
-checkpoint independently via `run(config, stage)`, writing `report_pretrain`
-and `report_sft` (`.json` and `.md`) so the effect of finetuning is directly
-visible. `_checkpoint_for` looks for `ckpt_best.pt` then `ckpt_last.pt` under
-`config.pretrain_dir` or `config.sft_dir`; a missing checkpoint causes that
-stage to be skipped, not to error. Each report has three parts:
-`score_completions` (in-distribution seed completions judged for grammar,
-coherence, referent-freedom), `score_instructions` (in-world instructions
-judged for coherence and instruction-following), and `knowledge_probe` (a
-real-world factual-question probe, explicitly labeled unreliable and demoted
-in the written report, since a tiny model answers out-of-distribution
-questions poorly regardless of how referent-free it is). `_extract_score` is
-a tolerant multi-pattern regex extractor handling verbose judge replies,
-"X/10", and "X out of 10" forms. Judge model defaults to
-`eval.judge_model` or falls back to `generate.default_model`.
+`run_all(config)` evaluates the pretrain checkpoint and every finetune variant
+independently via `run(config, stage, checkpoint_dir)`, writing
+`report_pretrain` and `report_sft` (or `report_sft_<variant>` per configured
+variant, via `_sft_targets`) so the effect of each finetuning approach is
+directly visible. `_find_checkpoint` looks for `ckpt_best.pt` then
+`ckpt_last.pt`; a missing checkpoint causes that stage to be skipped, not to
+error. Each report has three parts, all now spanning the same subject domains
+generation uses rather than a single topic (this was reworked alongside the
+referent relaxation and content broadening, node 41; the seed lists were still
+bank and forest fragments from the old referent-free corpus until this pass):
+`score_completions` (fixed seeds judged for grammar and coherence, the
+`referent_free` axis dropped since it rewarded avoiding real content, which is
+now backward), `score_instructions` (`TASK_INSTRUCTIONS` spanning explain,
+how-to, compare, define, answer, advise, summarize, rewrite, list, and reason,
+judged for coherence and whether the answer follows and is correct), and
+`accuracy_probe` (a real-world factual-question probe, renamed and inverted
+from `knowledge_probe`: it now scores correctness directly rather than
+referent avoidance, and is promoted from demoted-and-unreliable to the most
+direct available signal of what finetuning adds over the base pretrained
+model, though a model this small is still expected to know very little of
+it). `_extract_score` is a tolerant multi-pattern regex extractor handling
+verbose judge replies, "X/10", and "X out of 10" forms. Judge model defaults
+to `eval.judge_model` or falls back to `generate.default_model`.
 
 Pending, not yet implemented: an in-context binding evaluation axis
 (node 32, node 33) -- present a novel invented entity with attributes stated
