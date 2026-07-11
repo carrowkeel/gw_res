@@ -364,14 +364,20 @@ torchrun --standalone --nproc_per_node=4 -m slm.pretrain --config configs/poc.ya
 
 ## Evaluation
 
-Evaluation runs on both the pretrained model and the finetuned model, writing a
-separate report for each (`report_pretrain` and `report_sft`); a stage with no
-checkpoint is skipped. An existing model judges each two primary ways:
-completions from in-distribution seeds, scored for grammar, coherence, and how
-free they are of real-world referents; and in-world instructions, scored for
-coherence and for whether the answer follows the request. A small real-world
-knowledge probe is kept but demoted, because a tiny model answers such
-out-of-distribution questions poorly and those scores are unreliable.
+Evaluation runs on the pretrained model and every finetune variant, writing a
+separate report for each (`report_pretrain` and `report_sft` or
+`report_sft_<variant>` per variant); a stage with no checkpoint is skipped. An
+existing model judges three ways, all over seeds and instructions that span
+the same subject domains generation uses (everyday life, work, science,
+history, arts, relationships, health, technology, and more), not a single
+topic: completions from fixed seeds, scored for grammar and coherence;
+task instructions (explain, how-to, compare, define, answer, advise,
+summarize, rewrite, list, reason), scored for coherence and whether the
+answer follows the request, correctly where it has a factual or practical
+answer; and a factual accuracy probe on fixed real-world questions, scored for
+correctness. Since generation now targets a knowledgeable model, the accuracy
+probe is a direct signal of what finetuning adds over the base pretrained
+model, though a model this small should be expected to know very little of it.
 
 Score parsing tolerates verbose judge replies, the completion rubric forces low
 grades for text that is not well-formed English, and the report names the judge
