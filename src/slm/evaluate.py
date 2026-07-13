@@ -414,6 +414,12 @@ def run_all(config):
         report = run(config, label, checkpoint_dir)
         if report is not None:
             reports[label] = report
+    try:
+        from .report import write_summary
+
+        write_summary(config)
+    except Exception as error:
+        logger.warning('run summary failed: %s', error)
     return reports
 
 

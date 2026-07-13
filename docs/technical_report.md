@@ -15,10 +15,10 @@ decision referenced here (node numbers are given in parentheses).
 docs/               this report and the conversation summary
 src/slm/
   config.py         yaml-driven configuration schema
-  seeds.py          generic referent-free seed vocabulary
-  prompts.py        per-type prompt construction by severity
+  seeds.py          topic and structure seed vocabulary
+  prompts.py        grounded per-type prompt construction
   filters.py        heuristic contamination filter
-  worldgen.py       programmatic world-state: documents and binding tasks
+  worldgen.py       programmatic world-state: groundings, puzzles, binding tasks
   generate.py       stage 0: vLLM synthesis (multi-worker capable)
   tokenizer.py      stage 1: fresh BPE
   data.py           stage 2: pack corpus, mix instructions, datasets
@@ -27,6 +27,7 @@ src/slm/
   finetune.py       stage 4: supervised finetuning (replay + early stop)
   infer.py          load a checkpoint and sample
   evaluate.py       stage 5: judge, probes, binding
+  report.py         one-document run summary
   pipeline.py       local orchestrator
   sample.py         diagnostic: raw base-model completions
   inspect.py        diagnostic: corpus yield, diversity, contamination
@@ -44,15 +45,27 @@ configs/
 
 Runs the configured instruct model (default `Qwen/Qwen2.5-7B-Instruct`)
 through vLLM to synthesize `generate.number_of_texts` pretraining documents
-across four text types (prose, conversation, definition, description,
-weighted by `generate.text_type_weights`) and `generate.number_of_pairs`
-instruction pairs, at the configured `generate.severity` (`s1` or `s2`).
-Prompts come from `prompts.py`, using rotating structural axes (tone, point of
-view, length band, spatial and comparative relation vocabulary) from
-`seeds.py` to spread content, and a system prompt plus few-shot exemplars to
-suppress assistant framing and meta-commentary. Output passes through
+across five text types (prose, conversation, definition, description,
+reasoning, weighted by `generate.text_type_weights`) and
+`generate.number_of_pairs` instruction pairs. Prompts come from `prompts.py`;
+**every prompt of every type is grounded in a program-generated fact set**
+(node 46): `worldgen.sample_grounding` supplies a consistent world fragment
+or a puzzle (transfer arithmetic, invented-unit ratios, order chains) with
+its program-derived question, answer, and derivation, and the prompt
+instructs the LLM to weave the facts in without contradiction and, where a
+problem is worked, to reach the given correct answer. Prose uses fragment
+groundings (characters and setting from the named entities), conversation
+uses fragments or worked puzzles, definitions define invented units with
+exact conversion relations, descriptions describe a fragment, reasoning works
+a puzzle to its answer, and instruction pairs must state the facts in the
+user turn so every pair is answerable from its own context. Surface variety
+comes from rotating structural axes (domain, tone, form, point of view,
+length band up to several paragraphs) from `seeds.py`, plus few-shot
+exemplars matched to the grounded formats. Output passes through
 `filters.py` (`META_PHRASES`, `check_text`/`passes`) and deduplication before
 being written to `data/pretrain/shard_*.jsonl` and `data/sft/sft.jsonl`.
+There is no round-trip verification of the rendered text against the
+grounding yet (node 38); the renderer is trusted in this pass.
 
 **Referent-free content restrictions are currently relaxed** (intent graph
 node 41): the system prompt no longer forbids real facts, named entities,
@@ -64,15 +77,13 @@ detection remain in the filter, since those are corpus-quality problems
 independent of referent-freedom. `generate.severity` (`s1`/`s2`) still
 selects concrete-noun versus category-level prompt vocabulary via
 `seeds.entity_pool`, but no longer changes what content is allowed; the two
-severities currently produce equivalent restrictiveness. The definition text
-type was changed from inventing headwords to asking for real-word
-definitions, so the generator supplies genuine lexical knowledge. This is a
+severities currently produce equivalent restrictiveness. This is a
 deliberate, temporary MVP decision: the priority is a working, evaluable
 prompt-response model, since other project work depends on having one;
-referent-freeness is planned to return through a constructed world-state
-generator (node 36) rather than through re-tightening `prompts.py` and
-`filters.py`, since that original mechanism is implicated in the
-diversity-contraction problem (node 35).
+referent-freeness is planned to return through the constructed world-state
+generator (node 36), whose grounding half now feeds all generation, rather
+than through re-tightening `prompts.py` and `filters.py`, since that original
+mechanism is implicated in the diversity-contraction problem (node 35).
 
 When `generate.workers` is greater than one, `slurm/submit.py` turns this
 stage into a Slurm job array of single-GPU workers, each generating a
@@ -189,9 +200,9 @@ extractor handling verbose judge replies, "X/10", and "X out of 10" forms.
 Judge model defaults to `eval.judge_model` or falls back to
 `generate.default_model`.
 
-### worldgen (`src/slm/worldgen.py`) -- first increment of program-as-author
+### worldgen (`src/slm/worldgen.py`) -- program-as-author: worlds and puzzles
 
-Implements the first working piece of the world-state mechanism (node 36):
+Implements the working half of the world-state mechanism (node 36):
 `sample_world` builds a small world of invented people, places, and objects
 whose facts are consistent by construction (residence, workplace, ownership,
 and storage are functions; ages and sizes are total rank orders, so every
@@ -199,13 +210,37 @@ pairwise comparison has a unique answer); `_fragment` verbalizes a focus
 person's neighborhood through varied templates, including surface forms that
 invert the stated relation ("X is younger than Y" for an older-fact);
 `binding_tasks(seed, count)` emits evaluation tasks with program-known
-answers and distractors; `world_documents(seed, count)` emits
-consistency-bearing documents for future mixing into the pretraining corpus.
-Deterministic given the seed. `python -m slm.worldgen --seed 7` previews
-tasks. Deliberately template-rendered and single-domain in this pass; the
-next increments are the LLM-as-stylist rendering layer with round-trip
-verification (node 38), a persistent world shared across many documents,
-multi-hop questions, and a configured world-document fraction in the corpus.
+answers and distractors. `sample_grounding(rng, kind)` is the generation
+feed: it returns a fragment or one of three puzzle kinds, each with facts, a
+question, the program-derived answer, and a derivation -- **transfer**
+(countable-goods arithmetic, answers verified against independent
+recomputation over 500 samples), **ratio** (three invented units with exact
+integer conversion factors), **order** (a four-name comparison chain with
+direction-inverting surfaces). All prompt builders in `prompts.py` consume
+these groundings (node 46), realizing the construction-solving asymmetry
+(node 37): the program runs the cheap forward direction and hands the writer
+the hard-direction question already answered. Deterministic given the seed;
+`python -m slm.worldgen --seed 7` previews tasks. Remaining increments:
+round-trip verification of rendered text (node 38), a persistent world shared
+across many documents, and multi-hop questions.
+
+### report (`src/slm/report.py`) -- one-document run summary
+
+Collects a run into `eval/summary.md` plus machine-readable `summary.json`:
+model and corpus sizes with tokens-per-non-embedding-parameter, pretrain and
+finetune loss curves (read from `checkpoints/*/history.jsonl`, which
+`pretrain.py` and `finetune.py` now write at each validation point) with
+perplexities, a comparable-loss table scoring every checkpoint (pretrain and
+each finetune variant) on the same held-out data -- the corpus validation
+stream, where a rise after finetuning indicates forgetting, and the held-out
+instruction pairs (the same split finetune used, reproduced from the seed),
+where a drop indicates instruction gain -- and the judged plus exact-match
+evaluation means per stage from the `report_*.json` files. Finetune
+checkpoints now persist `train_loss`, `validation_loss`, and
+`best_validation` alongside the weights. Written automatically at the end of
+`evaluate.run_all` (failure-tolerant) and regenerable standalone:
+`python -m slm.report --config <cfg>`. This document is the intended
+paste-into-conversation artifact for reporting a run.
 
 ### pipeline (`src/slm/pipeline.py`) and Slurm submitter (`slurm/submit.py`)
 
@@ -320,34 +355,33 @@ trace back to the abandoned role-token SFT design.
 1. **Run the cheap scale-up on the existing corpus.** Submit
    `configs/scale/mini.yaml` (tokenizer through evaluate, no generation) to
    train the `mini` model on `runs/world/corpus_full` with the consolidated
-   finetune (replay + early stop). Compare against the full-rung micro
-   results, and watch the new in-context binding exact-match score: it is the
-   coherence gauge for the graph-experiment gate (node 45).
+   finetune (replay + early stop). The run ends with `eval/summary.md`, the
+   one-document result to compare against the full-rung micro numbers; watch
+   the in-context binding exact-match score, the coherence gauge for the
+   graph-experiment gate (node 45). Note the existing corpus predates
+   grounded generation, so this run measures the scale lever only.
 
-2. **Extend worldgen toward the full program-as-author mechanism.** The v1
-   module (node 36) is template-rendered, single-domain, and fresh-world-per
-   -document. Next increments, in rough order: mix `world_documents` into the
-   pretraining corpus at a configured fraction (directly trains the binding
-   the probe measures); multi-hop questions (combining two stated facts);
-   a persistent world shared across many documents; and the LLM-as-stylist
-   rendering layer with round-trip verification (node 38), which is where the
-   construction-solving asymmetry (node 37) starts producing reasoning data.
+2. **Run the next full generation with grounded prompts.** The next
+   `world.yaml` ladder run generates the grounded, longer-document corpus
+   (every prompt fed by worldgen facts and answers, node 46). This is the
+   data lever: compare its rungs' summaries against the current corpus's,
+   especially binding and the reasoning-content quality.
 
-3. **Open the graph-experiment gate when binding clears its floor
+3. **Extend worldgen.** In rough order: round-trip verification of rendered
+   text against the grounding, discarding mismatches (node 38, the missing
+   safeguard now that all text flows through the renderer); multi-hop
+   questions (combining two stated facts); a persistent world shared across
+   many documents (node 36).
+
+4. **Open the graph-experiment gate when binding clears its floor
    (node 45).** Once binding exact-match rises well clear of the guessing
    floor and holds across rungs, start the graph input/output comparisons
    using the existing graph pipeline unchanged.
-
-4. **Abstract number and counting domain (node 40).** Largely subsumed by
-   the referent relaxation (numbers are no longer stripped); the remaining
-   idea worth keeping is counting and comparison tasks with program-known
-   answers, which fits naturally as a worldgen question type rather than a
-   prompt/filter change.
 
 5. **Cosmetic cleanup**: remove the vestigial `<|user|>`/`<|assistant|>`
    tokens from `TokenizerConfig.special_tokens`; they are remnants of the
    abandoned role-token design and nothing reads them.
 
-Item 1 is ready to run. Items 2 through 4 are design-bearing and should have
-their scope confirmed before implementation, consistent with the project's
-workflow rule that code is written only when explicitly asked for.
+Items 1 and 2 are ready to run. Items 3 and 4 are design-bearing and should
+have their scope confirmed before implementation, consistent with the
+project's workflow rule that code is written only when explicitly asked for.
