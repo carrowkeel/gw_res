@@ -260,6 +260,41 @@ def accuracy_probe(config, student, engine, sampling):
     return {'results': results, 'mean_accuracy': _mean(scores)}
 
 
+def binding_probe(config, student):
+    """Score in-context binding on program-generated tasks, judge-free.
+
+    Each task supplies every needed fact in its context, about novel invented
+    entities, so nothing is answerable from world knowledge; the gold answer
+    is known by construction and scored by exact match. This measures whether
+    the model can bind and retrieve information given in context, the
+    coherence gauge that gates the later experiments (see the intent graph),
+    and it costs no judge calls.
+    """
+    from . import worldgen
+
+    eval_config = config.eval
+    tasks = worldgen.binding_tasks(
+        config.project.seed + 3, eval_config.number_of_binding_tasks
+    )
+    results = []
+    scores = []
+    for task in tasks:
+        prompt = '%s\nQuestion: %s\nAnswer:' % (
+            task['context'], task['question']
+        )
+        output = student.complete(
+            prompt, max_new_tokens=24, temperature=0.3,
+            repetition_penalty=eval_config.repetition_penalty,
+        )
+        score = worldgen.score_binding_answer(task, output)
+        results.append({
+            'question': task['question'], 'answer': task['answer'],
+            'output': output.strip(), 'correct': score,
+        })
+        scores.append(score)
+    return {'results': results, 'exact_match': _mean(scores)}
+
+
 def write_report(config, report):
     stage = report['stage']
     output_directory = ensure_directory(config.eval_dir)
@@ -309,6 +344,17 @@ def write_report(config, report):
             '- Q: %s\n  A: %r (accuracy %s)'
             % (result['question'], result['answer'], result['accuracy'])
         )
+    lines += [
+        '',
+        '## In-context binding (exact match, zero to one)',
+        '- exact match: %s' % report['binding']['exact_match'],
+    ]
+    for result in report['binding']['results'][:6]:
+        lines.append(
+            '- Q: %s\n  gold: %s\n  model: %r (%s)'
+            % (result['question'], result['answer'], result['output'],
+               'correct' if result['correct'] else 'wrong')
+        )
     report_path = output_directory / ('report_%s.md' % stage)
     report_path.write_text('\n'.join(lines))
     logger.info('wrote evaluation report to %s', report_path)
@@ -352,6 +398,7 @@ def run(config, stage='pretrain', checkpoint_dir=None):
         'completions': score_completions(config, student, engine, sampling),
         'instructions': score_instructions(config, student, engine, sampling),
         'probe': accuracy_probe(config, student, engine, sampling),
+        'binding': binding_probe(config, student),
     }
     write_report(config, report)
     return report

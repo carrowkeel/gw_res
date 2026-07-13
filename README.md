@@ -44,16 +44,17 @@ Evaluation covers the base model and each finetune variant, writing
 `report_pretrain` and one `report_sft` (or `report_sft_<variant>` per variant),
 so the effect of finetuning is visible.
 
-The finetune stage supports a sweep of variants, each forked from the same
-pretrain checkpoint, so several approaches can be compared cheaply against one
-pretraining run. A variant is a `{name, ...overrides}` entry under
-`finetune.variants`, and the knobs are `loss_mode` (`response_only` or
-`full_sequence`), `replay_fraction` (mix that fraction of pretraining batches in
-to counter forgetting), `validation_fraction` with `early_stop_patience` and
-`evaluation_interval` (stop on held-out pair loss), and any optimization field
-(`learning_rate`, `epochs`, ...). With no variants a config runs a single
-finetune to `checkpoints/sft/`, as before; with variants each writes to
-`checkpoints/sft/<name>/` and the submitter fans them out in parallel.
+The configured finetuning approach combines pretraining-data replay
+(`replay_fraction: 0.5`, drawing half the training micro-batches from the
+packed pretraining data to counter forgetting) with validation early stopping
+(`validation_fraction`, `early_stop_patience`, `evaluation_interval`), since
+plain finetuning measured slightly below the base model on every axis. The
+stage also supports a sweep of variants when a comparison is wanted: a variant
+is a `{name, ...overrides}` entry under `finetune.variants`, overriding any
+finetune field including `loss_mode` (`response_only` or `full_sequence`).
+With no variants a config runs a single finetune to `checkpoints/sft/`; with
+variants each writes to `checkpoints/sft/<name>/`, the submitter fans them out
+in parallel, and each is evaluated into `report_sft_<name>`.
 
 ## Referent-free design
 
@@ -262,7 +263,21 @@ far. The config sets the full (largest) generation target and model, plus a
 | pico | 0.10 | pico | 100k | ~12M |
 | nano | 0.25 | nano | 250k | ~30M |
 | micro | 0.50 | micro | 500k | ~60M |
-| full | 1.00 | micro | 1M | ~120M |
+| full | 1.00 | mini | 1M | ~120M |
+
+The full rung steps the model up to `mini` rather than repeating `micro` on
+more data: with early stopping governing the effective number of epochs,
+training a larger model for several passes over the same corpus is nearly as
+good as fresh data (returns hold up to roughly four epochs), and it costs no
+new generation. The same lever works on an already-generated corpus:
+`configs/scale/mini.yaml` points `project.corpus_dir` at an existing snapshot
+(`runs/world/corpus_full`) and trains the `mini` model on it with no
+generation stage at all:
+
+```bash
+python slurm/submit.py --config configs/scale/mini.yaml \
+  --stages tokenizer,data,pretrain,finetune,evaluate
+```
 
 The submitter detects the `scale` section and runs a **progressive** ladder.
 Generation proceeds in cumulative chunks (the resumable generator tops up to
@@ -283,12 +298,11 @@ scancel --name slm-gen-nano --name slm-merge-nano   # and later rung jobs
 
 Each rung writes its own tokenizer, packed data, checkpoints, and evaluation
 reports under `runs/world/<rung>/`; the submitter materializes each rung's
-resolved config there. `world.yaml` also defines a `finetune.variants` sweep
-(baseline, replay, early-stopping, full-sequence loss, low learning rate), so
-every rung runs all variants against its one pretrain checkpoint and evaluates
-each, yielding a `report_sft_<variant>` at every scale. That is the cheap,
-repeated signal used to iterate on the finetuning stage across both model size
-and approach in a single run. The pretrain log prints
+resolved config there. Finetuning is consolidated to one configured approach
+(pretraining-data replay at half the micro-batches, plus validation early
+stopping), so each rung runs a single finetune job; the variant-sweep harness
+remains available by listing entries under `finetune.variants` when a
+comparison is wanted. The pretrain log prints
 `tokens per non-embedding parameter` per rung so the size ratio stays visible.
 
 ## Graph-context pipeline (experimental)
@@ -379,6 +393,21 @@ correctness. Since generation now targets a knowledgeable model, the accuracy
 probe is a direct signal of what finetuning adds over the base pretrained
 model, though a model this small should be expected to know very little of it.
 
+A fourth measure needs no judge at all: the in-context binding probe. The
+`slm.worldgen` module programmatically samples small worlds of invented
+people, places, and objects whose facts are consistent by construction,
+verbalizes a fragment into a context paragraph, and asks a question whose
+exact answer the program knows (who owns a thing, where it is kept, which of
+two is older or larger, including surface forms that invert the stated
+direction). Nothing is answerable from world knowledge, so the exact-match
+score isolates whether the model can bind and retrieve information given in
+context. This is the coherence gauge that gates the later experiments
+(notably testing the graph input/output training approach), and it is the
+first working piece of the program-as-author generation mechanism: the same
+module can emit consistency-bearing documents (`worldgen.world_documents`)
+for future mixing into the corpus. Preview tasks with
+`python -m slm.worldgen --seed 7`.
+
 Score parsing tolerates verbose judge replies, the completion rubric forces low
 grades for text that is not well-formed English, and the report names the judge
 model. Scores are only meaningful with a capable judge; the smoke config uses a
@@ -410,9 +439,10 @@ srun --pty python -m slm.chat --config runs/world/pico/config.yaml
 .intent/project/   crystallized project intent graph
 src/slm/
   config.py        yaml-driven configuration schema
-  seeds.py         generic referent-free seed vocabulary
-  prompts.py       per-type prompt construction by severity
-  filters.py       heuristic referent-leakage filter
+  seeds.py         topic and structure seed vocabulary for prompts
+  prompts.py       per-type prompt construction
+  filters.py       heuristic contamination filter
+  worldgen.py      programmatic world-state: documents and binding tasks
   generate.py      stage 0: vLLM synthesis
   tokenizer.py     stage 1: fresh BPE
   data.py          stage 2: pack corpus, datasets
@@ -433,5 +463,6 @@ slurm/
   submit.py            dependency-chained sbatch submitter
   example_stage.sbatch
 configs/
-  poc.yaml, smoke.yaml
+  poc.yaml, smoke.yaml, pilot.yaml
+  scale/world.yaml, scale/mini.yaml
 ```
