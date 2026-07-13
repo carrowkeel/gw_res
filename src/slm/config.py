@@ -134,6 +134,7 @@ class EvalConfig:
     judge_model: str = None
     number_of_generation_samples: int = 200
     number_of_probe_questions: int = 100
+    number_of_binding_tasks: int = 32
     max_new_tokens: int = 256
     temperature: float = 0.8
     top_p: float = 0.95

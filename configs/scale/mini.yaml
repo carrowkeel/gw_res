@@ -1,7 +1,8 @@
 project:
-  name: scale-world
-  out_dir: runs/world
+  name: mini-on-full
+  out_dir: runs/world/mini
   seed: 1337
+  corpus_dir: runs/world/corpus_full
 
 generate:
   default_model: Qwen/Qwen2.5-7B-Instruct
@@ -19,7 +20,7 @@ generate:
   top_p: 0.95
   frequency_penalty: 0.4
   max_tokens: 512
-  workers: 16
+  workers: 1
   tensor_parallel_size: 1
   gpu_memory_utilization: 0.90
   max_model_len: 2048
@@ -34,7 +35,7 @@ tokenizer:
   minimum_frequency: 2
 
 model:
-  preset: micro
+  preset: mini
   block_size: 512
   dropout: 0.1
   tie_embeddings: true
@@ -87,52 +88,6 @@ eval:
   student_gpu_memory_utilization: 0.45
   judge_gpu_memory_utilization: 0.45
 
-scale:
-  rungs:
-    - name: pico
-      fraction: 0.10
-      tokenizer:
-        vocabulary_size: 4000
-      model:
-        preset: pico
-        dropout: 0.15
-      pretrain:
-        maximum_steps: 5000
-        gradient_accumulation_steps: 4
-        warmup_steps: 150
-        evaluation_interval: 100
-        checkpoint_interval: 250
-    - name: nano
-      fraction: 0.25
-      tokenizer:
-        vocabulary_size: 6000
-      model:
-        preset: nano
-        dropout: 0.1
-      pretrain:
-        maximum_steps: 10000
-        gradient_accumulation_steps: 4
-        warmup_steps: 250
-        evaluation_interval: 150
-        checkpoint_interval: 500
-    - name: micro
-      fraction: 0.50
-      tokenizer:
-        vocabulary_size: 8000
-      model:
-        preset: micro
-        dropout: 0.1
-      pretrain:
-        maximum_steps: 16000
-        warmup_steps: 350
-    - name: full
-      fraction: 1.00
-      tokenizer:
-        vocabulary_size: 8000
-      model:
-        preset: mini
-        dropout: 0.1
-
 slurm:
   enabled: true
   partition: null
@@ -142,5 +97,5 @@ slurm:
   cpus_per_task: 8
   time_limit: "24:00:00"
   pretrain_gres: null
-  log_dir: runs/world/slurm_logs
+  log_dir: runs/world/mini/slurm_logs
   extra_sbatch: []

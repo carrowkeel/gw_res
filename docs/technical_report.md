@@ -17,15 +17,16 @@ src/slm/
   config.py         yaml-driven configuration schema
   seeds.py          generic referent-free seed vocabulary
   prompts.py        per-type prompt construction by severity
-  filters.py        heuristic referent-leakage filter
+  filters.py        heuristic contamination filter
+  worldgen.py       programmatic world-state: documents and binding tasks
   generate.py       stage 0: vLLM synthesis (multi-worker capable)
   tokenizer.py      stage 1: fresh BPE
   data.py           stage 2: pack corpus, mix instructions, datasets
   model.py          from-scratch decoder
   pretrain.py       stage 3: pretraining loop
-  finetune.py       stage 4: supervised finetuning (optional, see below)
+  finetune.py       stage 4: supervised finetuning (replay + early stop)
   infer.py          load a checkpoint and sample
-  evaluate.py       stage 5: judge both pretrain and sft checkpoints
+  evaluate.py       stage 5: judge, probes, binding
   pipeline.py       local orchestrator
   sample.py         diagnostic: raw base-model completions
   inspect.py        diagnostic: corpus yield, diversity, contamination
@@ -34,7 +35,7 @@ slurm/
   example_stage.sbatch
 configs/
   poc.yaml, smoke.yaml, pilot.yaml
-  scale/world.yaml
+  scale/world.yaml, scale/mini.yaml
 ```
 
 ## Current pipeline, stage by stage
@@ -117,7 +118,7 @@ the primary mechanism by which the model learns instruction-following
 ordinary tokens in the same training stream as pretraining text, the model
 does not need a second training phase to acquire the Question/Answer format.
 
-### finetune (`src/slm/finetune.py`) -- root-cause bug fixed; now a sweep harness
+### finetune (`src/slm/finetune.py`) -- bug fixed; consolidated to replay + early stop
 
 Continues from the pretrain checkpoint, training on the pairs via `PairDataset`.
 It repeatedly collapsed the model into repetitive, low-grammar output
@@ -132,19 +133,25 @@ explains why co-trained instruction following (correctly shifted packed path)
 worked while this stage did not. Labels are now next-token targets with the
 prompt span masked in `response_only` mode.
 
-The stage is kept a default and turned into a cheap experiment surface. It
-supports a **variant sweep** (node 44): each variant forks from the same
-pretrain checkpoint and overrides finetune fields, with new knobs `loss_mode`
-(`response_only` / `full_sequence`), `replay_fraction` (draw that fraction of
-training micro-batches from the packed pretraining data to counter forgetting),
-and `validation_fraction` + `early_stop_patience` + `evaluation_interval`
-(hold out pairs, stop on their loss). Variants write to `checkpoints/sft/<name>`
-and evaluate into `report_sft_<name>`; the submitter fans them out in parallel,
-and every scale-world rung runs the whole sweep. With no `finetune.variants`
-a config runs a single finetune to `checkpoints/sft/` as before. The shipped
-`world.yaml` sweep is baseline / replay / early-stopping / full-sequence loss /
-low learning rate. The open question the sweep answers first: whether the bug
-fix alone resolves the collapse, and if not, which knob does.
+**Post-fix measurement (full rung, broadened corpus, updated eval):** the
+collapse is gone; the finetuned model produces fluent, instruction-shaped
+output. But plain finetuning scored slightly below the base model on every
+axis (grammar 4.44 vs 5.62, coherence 3.72 vs 4.84, factual accuracy ~1.4 for
+both), consistent with mild residual forgetting; the dominant remaining
+failure (semantic drift, unstable referent binding) is shared with the base
+model and is a pretraining-scale property, not an SFT problem.
+
+The configured approach is therefore consolidated to one option: the base
+finetune config sets `replay_fraction: 0.5` (half the training micro-batches
+drawn from the packed pretraining data, countering forgetting) plus
+`validation_fraction: 0.05` with `early_stop_patience: 3` (stop on held-out
+pair loss), and `finetune.variants` is empty, so each rung runs a single
+finetune job. The **variant sweep harness** (node 44) remains fully available:
+each `{name, ...overrides}` entry under `finetune.variants` forks from the
+same pretrain checkpoint, writes to `checkpoints/sft/<name>`, evaluates into
+`report_sft_<name>`, and the submitter fans variants out in parallel — list
+variants whenever a comparison is wanted. `loss_mode` supports
+`response_only` / `full_sequence`.
 
 ### evaluate (`src/slm/evaluate.py`)
 
@@ -154,10 +161,10 @@ independently via `run(config, stage, checkpoint_dir)`, writing
 variant, via `_sft_targets`) so the effect of each finetuning approach is
 directly visible. `_find_checkpoint` looks for `ckpt_best.pt` then
 `ckpt_last.pt`; a missing checkpoint causes that stage to be skipped, not to
-error. Each report has three parts, all now spanning the same subject domains
-generation uses rather than a single topic (this was reworked alongside the
-referent relaxation and content broadening, node 41; the seed lists were still
-bank and forest fragments from the old referent-free corpus until this pass):
+error. Each report has four parts, the first three spanning the same subject domains
+generation uses rather than a single topic (reworked alongside the referent
+relaxation and content broadening, node 41, after the seed lists were found
+still carrying bank and forest fragments from the old referent-free corpus):
 `score_completions` (fixed seeds judged for grammar and coherence, the
 `referent_free` axis dropped since it rewarded avoiding real content, which is
 now backward), `score_instructions` (`TASK_INSTRUCTIONS` spanning explain,
@@ -168,19 +175,37 @@ from `knowledge_probe`: it now scores correctness directly rather than
 referent avoidance, and is promoted from demoted-and-unreliable to the most
 direct available signal of what finetuning adds over the base pretrained
 model, though a model this small is still expected to know very little of
-it). `_extract_score` is a tolerant multi-pattern regex extractor handling
-verbose judge replies, "X/10", and "X out of 10" forms. Judge model defaults
-to `eval.judge_model` or falls back to `generate.default_model`.
+it). The fourth part is `binding_probe` (node 33, implemented): tasks from
+`slm.worldgen` state consistent facts about novel invented entities in a
+context paragraph and ask one back (ownership, storage, residence, or a
+two-way age/size comparison whose surface form may invert the stated
+direction); scoring is exact match of the gold name in the head of the
+completion, before the distractor for comparisons, with no judge involved.
+Nothing in a binding task is answerable from world knowledge, so it isolates
+the processor capability (node 32) and serves as the coherence gauge for the
+graph-experiment gate (node 45). `eval.number_of_binding_tasks` (default 32)
+sets the task count. `_extract_score` is a tolerant multi-pattern regex
+extractor handling verbose judge replies, "X/10", and "X out of 10" forms.
+Judge model defaults to `eval.judge_model` or falls back to
+`generate.default_model`.
 
-Pending, not yet implemented: an in-context binding evaluation axis
-(node 32, node 33) -- present a novel invented entity with attributes stated
-only in the prompt, then ask comprehension or inference questions requiring
-those attributes to be combined, scored for correctness rather than judged
-subjectively. This is argued to be a more meaningful primary metric than the
-existing knowledge probe, since it tests the presence of a genuine capability
-(binding) rather than only the absence of one (real-world recall). It has no
-existing code to build on and needs either hand-written task templates or the
-world-state generator described below.
+### worldgen (`src/slm/worldgen.py`) -- first increment of program-as-author
+
+Implements the first working piece of the world-state mechanism (node 36):
+`sample_world` builds a small world of invented people, places, and objects
+whose facts are consistent by construction (residence, workplace, ownership,
+and storage are functions; ages and sizes are total rank orders, so every
+pairwise comparison has a unique answer); `_fragment` verbalizes a focus
+person's neighborhood through varied templates, including surface forms that
+invert the stated relation ("X is younger than Y" for an older-fact);
+`binding_tasks(seed, count)` emits evaluation tasks with program-known
+answers and distractors; `world_documents(seed, count)` emits
+consistency-bearing documents for future mixing into the pretraining corpus.
+Deterministic given the seed. `python -m slm.worldgen --seed 7` previews
+tasks. Deliberately template-rendered and single-domain in this pass; the
+next increments are the LLM-as-stylist rendering layer with round-trip
+verification (node 38), a persistent world shared across many documents,
+multi-hop questions, and a configured world-document fraction in the corpus.
 
 ### pipeline (`src/slm/pipeline.py`) and Slurm submitter (`slurm/submit.py`)
 
@@ -255,14 +280,30 @@ progressive DAG: cumulative generation chunks, each frozen into a snapshot
 generating. See the generate/config/submit sections below and the README's
 scaling-ladder section for the mechanics.
 
-Results from the previous per-config ladder still stand as the most recent
-training evidence, all on the old referent-free scenery corpus: pico and nano
-ran end-to-end with a fluent, referent-avoiding base pretrained model, and the
-separate sft checkpoint collapsed at nano (`report_sft` grammar 1.7). Micro's
-interactive session showed coherent completions from the pretrain model; its
-sft behavior was never separately reported. None of this has been re-measured
-since the referent relaxation and content broadening, so the scale-world runner
-on the new corpus is the next source of real results.
+The first full ladder run on the broadened corpus completed. Post-fix, the
+full-rung (then micro preset, ~6M non-embedding parameters, ~120M tokens)
+measurements with the updated evaluation: pretrain grammar 5.62 / coherence
+4.84, sft baseline 4.44 / 3.72, factual accuracy ~1.4 for both. The model
+learned grammar, register, and instruction format (numbered lists, definition
+form), but shows semantic drift: it cannot hold a referent constant across a
+sentence ("the ridge is generally smaller than the ridge"), blends answer
+templates, and free-associates within domains. This is the expected behavior
+at ~6M parameters (~20x smaller than GPT-2-small), a capability ceiling
+rather than a bug, and it is shared between pretrain and sft.
+
+In response, the ladder's top rung was changed from repeating micro on the
+full corpus to the `mini` preset (~14M non-embedding parameters): with early
+stopping governing effective epochs, a larger model trained for several
+passes over the same corpus is nearly as good as fresh data up to roughly
+four epochs and costs no new generation. `configs/scale/mini.yaml` packages
+the same lever for the already-generated corpus (train-only run pointing
+`project.corpus_dir` at `runs/world/corpus_full`), which is the immediate
+next run:
+
+```bash
+python slurm/submit.py --config configs/scale/mini.yaml \
+  --stages tokenizer,data,pretrain,finetune,evaluate
+```
 
 ## Known inconsistency to clean up
 
@@ -276,57 +317,37 @@ trace back to the abandoned role-token SFT design.
 
 ## Next steps, ranked by decision strength
 
-1. **Run the scale-world ladder on the new corpus and iterate on finetune.**
-   The immediate source of real results: run `configs/scale/world.yaml`,
-   inspect each rung's frozen corpus snapshot, and compare `report_pretrain`
-   against `report_sft` at pico/nano/micro/full. The standing decision is to
-   keep finetune a default and improve it gradually (node 15, node 30), not to
-   remove it; the first experiment is simply whether the collapse persists on
-   the relaxed, multi-domain corpus, followed by trying pretraining-data replay
-   during finetuning to counter forgetting.
+1. **Run the cheap scale-up on the existing corpus.** Submit
+   `configs/scale/mini.yaml` (tokenizer through evaluate, no generation) to
+   train the `mini` model on `runs/world/corpus_full` with the consolidated
+   finetune (replay + early stop). Compare against the full-rung micro
+   results, and watch the new in-context binding exact-match score: it is the
+   coherence gauge for the graph-experiment gate (node 45).
 
-2. **In-context binding evaluation axis.** Theoretically well-motivated
-   (node 32, node 33) and the clearest next validation improvement, but needs
-   design work: either hand-author a small set of template tasks (novel
-   invented entity, stated attributes, a question requiring combining them,
-   with a known correct answer for automatic scoring instead of judge
-   scoring), or build it on top of item 4 below. Not yet started.
+2. **Extend worldgen toward the full program-as-author mechanism.** The v1
+   module (node 36) is template-rendered, single-domain, and fresh-world-per
+   -document. Next increments, in rough order: mix `world_documents` into the
+   pretraining corpus at a configured fraction (directly trains the binding
+   the probe measures); multi-hop questions (combining two stated facts);
+   a persistent world shared across many documents; and the LLM-as-stylist
+   rendering layer with round-trip verification (node 38), which is where the
+   construction-solving asymmetry (node 37) starts producing reasoning data.
 
-3. **Abstract number and counting domain (node 40).** A scoped, bounded
-   change to `filters.py` and `prompts.py`: distinguish real-world bound
-   quantities (dates, measured real facts, still banned) from abstract
-   counting and comparison over invented or generic entities (currently
-   over-suppressed by S1's blanket number ban). Would restore quantity
-   grammar as a reasoning substrate. Not yet started; needs a concrete
-   design for what counts as "abstract" versus "bound" before implementation.
+3. **Open the graph-experiment gate when binding clears its floor
+   (node 45).** Once binding exact-match rises well clear of the guessing
+   floor and holds across rungs, start the graph input/output comparisons
+   using the existing graph pipeline unchanged.
 
-4. **Persistent world-state generator (node 36), program-as-author
-   architecture (node 38), and construction-solving asymmetry (node 37).**
-   The largest and least concrete pending item: a new, non-LLM `worldgen`
-   stage that samples a persistent world-state (entities, relations, an
-   invented lexicon) and tasks within it, uses the construction-solving
-   asymmetry to generate problems harder than the generator LLM could solve
-   itself, hands the LLM only local fragments to render fluently, and
-   round-trip-verifies rendered output against the intended structure,
-   discarding mismatches. This would supersede per-document local consistency
-   (node 10) for reasoning-era text, promote S3 (node 25) from an isolated
-   severity rung to the corpus's coordination mechanism, resolve the
-   information-is-consistent-novelty problem (node 34) and the LLM-as-author
-   diversity contraction problem (node 35), and supply ground-truth-bearing
-   material for item 2. This is a substantial redesign of the generate stage
-   and has not been scoped into concrete modules or file changes yet; it
-   should be designed before being implemented, likely starting with a single
-   narrow world-state domain (for example, spatial or relational facts among
-   a handful of invented entities) rather than a general system.
+4. **Abstract number and counting domain (node 40).** Largely subsumed by
+   the referent relaxation (numbers are no longer stripped); the remaining
+   idea worth keeping is counting and comparison tasks with program-known
+   answers, which fits naturally as a worldgen question type rather than a
+   prompt/filter change.
 
 5. **Cosmetic cleanup**: remove the vestigial `<|user|>`/`<|assistant|>`
-   tokens from `TokenizerConfig.special_tokens` once finetune's status is
-   settled (item 1), since both are remnants of the pre-redesign role-token
-   approach and neither is read anywhere in the current codebase.
+   tokens from `TokenizerConfig.special_tokens`; they are remnants of the
+   abandoned role-token design and nothing reads them.
 
-Items 1 and 5 are small, mechanical, and low-risk once approved. Items 2
-through 4 are open-ended design work motivated by the theoretical discussion
-in `docs/conversation_summary.md` section 15 and the intent-graph nodes it
-produced; none should be started without confirming scope first, consistent
-with the project's stated workflow rule that code is written only when
-explicitly asked for.
+Item 1 is ready to run. Items 2 through 4 are design-bearing and should have
+their scope confirmed before implementation, consistent with the project's
+workflow rule that code is written only when explicitly asked for.
