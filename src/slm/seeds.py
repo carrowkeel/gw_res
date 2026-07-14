@@ -70,23 +70,23 @@ POINTS_OF_VIEW = [
 ]
 
 LENGTH_BANDS = [
-    'a few sentences', 'a short paragraph', 'two short paragraphs',
-    'several short paragraphs',
+    'a short paragraph', 'two paragraphs', 'three paragraphs',
+    'four or five paragraphs',
 ]
 
 DIALOGUE_GOALS = [
     'settle a disagreement about how to handle a shared problem',
     'negotiate who does which part of a shared task',
-    'one tries to persuade the other to change a decision',
+    'argue over a decision one of them wants changed',
     'work out the order in which a series of events happened',
     'weigh two courses of action under a real constraint',
-    'one breaks difficult news and the other takes it in',
+    'break difficult news, one telling and the other taking it in',
     'divide a limited resource between them fairly',
-    'one asks the other for help and explains why it is needed',
-    'one teaches the other how to do something, meeting objections',
+    'arrange help, one asking and the other explaining what it will take',
+    'go over how to do something, one teaching and the other objecting',
     'reconcile after a disagreement, each giving some ground',
     'plan something together and discover they want different things',
-    'one confronts the other about a broken promise',
+    'have out a broken promise between them',
 ]
 
 REASONING_MODES = [

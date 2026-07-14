@@ -1,29 +1,27 @@
 """Prompt construction for synthetic generation.
 
-Referent stripping is relaxed: generation targets a functional, knowledgeable
-prompt-response model, so real facts, named entities, numbers, and technical
-vocabulary are all allowed. Generation is deliberately not confined to any one
-subject: every prompt is anchored in a sampled subject domain so the corpus
-ranges over everyday life, work, science, history, the arts, relationships,
-health, technology, and more, rather than repeating a single kind of scene.
+Every prompt is grounded in a program-generated fact set from slm.worldgen:
+the program authors the logic (a consistent world fragment, or a puzzle whose
+answer it derived by construction), and the LLM only writes it up in the
+register the text type asks for. The same grounding machinery serves every
+type, so a transfer puzzle can surface as a dialogue, a reasoning piece, or an
+instruction pair, and a world fragment as a story or a description. The
+rationale is that a small model can only learn patterns that are actually
+there: text whose internal logic is loose or contradictory gives it nothing
+stable to learn, so all generated text is anchored to facts that cannot
+contradict each other, with correct answers supplied to the writer rather
+than left for it to compute.
 
-Each text type also carries a structural demand. Prose asks for a story with
-plot (a character who wants something, is opposed, and reaches an outcome),
-not static observation. The reasoning type asks for genuinely ordered
-explanation or argument (cause before effect, steps in order, reasons by
-weight), so its logic cannot be faked with loose, poetic association.
-Instruction pairs span many real task kinds (explain, how-to, compare, define,
-answer, advise, summarize, rewrite, list, reason), so the model learns to do
-tasks, not only to describe scenes.
-
-Diversity comes from two places. Each prompt samples independent structural
-axes (domain, tone, form, point of view, length, reasoning mode, task kind).
-Each request is also anchored with one exemplar sampled from a rotating pool,
-so the generator returns only the text with no preamble without collapsing
-onto a single style.
+Referent stripping is relaxed: real facts, named entities, numbers, and
+technical vocabulary are all allowed, and prompts are additionally anchored in
+a sampled subject domain so surface content stays varied. Each text type also
+carries a structural demand (plot for prose, worked order for reasoning, turns
+that do work for conversation). Diversity comes from independent structural
+axes (domain, tone, form, point of view, length, grounding kind) plus one
+exemplar sampled from a rotating pool per request.
 """
 
-from . import seeds
+from . import seeds, worldgen
 
 TEXT_TYPES = ['prose', 'conversation', 'definition', 'description', 'reasoning']
 
@@ -84,19 +82,22 @@ _CONVERSATION_EXEMPLARS = [
 ]
 
 _DEFINITION_EXEMPLARS = [
-    'interest: a charge paid for the use of borrowed money, set as a share of '
-    'the amount borrowed over a period of time. Interest is owed on top of the '
-    'original sum and grows the longer the sum goes unpaid.\n'
-    'principal: the original amount of money borrowed or invested, apart from '
-    'any interest. The principal is the figure on which interest is '
-    'calculated.',
+    'darsel: the smallest unit of weight used at the market scales. Four '
+    'darsels make one kevrin, so the darsel is the unit in which small '
+    'goods are weighed out.\n'
+    'kevrin: a unit of weight equal to four darsels. Heavier wares are '
+    'quoted in kevrins, and three kevrins make one paldor.\n'
+    'paldor: the largest unit of weight in common use, equal to three '
+    'kevrins and therefore to twelve darsels. Cart loads are reckoned in '
+    'paldors.',
 
-    'artery: a vessel that carries blood away from the heart to the rest of '
-    'the body. An artery has thick, muscular walls that withstand the pressure '
-    'of each heartbeat.\n'
-    'vein: a vessel that carries blood back toward the heart. A vein has '
-    'thinner walls than an artery and contains valves that keep the blood from '
-    'flowing backward.',
+    'mirel: the basic unit of cloth length, the width of a standard loom. '
+    'Five mirels make one tovan, so short pieces are cut and sold by the '
+    'mirel.\n'
+    'tovan: a unit of cloth length equal to five mirels. A bolt is wound '
+    'and priced by the tovan, and two tovans make one seldric.\n'
+    'seldric: the largest cloth measure, equal to two tovans and therefore '
+    'to ten mirels. Whole consignments are invoiced in seldrics.',
 ]
 
 _DESCRIPTION_EXEMPLARS = [
@@ -115,22 +116,16 @@ _DESCRIPTION_EXEMPLARS = [
 ]
 
 _REASONING_EXEMPLARS = [
-    'Bread rises because the yeast in the dough feeds on sugars and gives off '
-    'gas as it does. The gas cannot escape the stretched, elastic network the '
-    'flour forms when it is kneaded, so it collects in small pockets and '
-    'pushes the dough outward. Heat from the oven makes the trapped gas expand '
-    'faster still, and then sets the walls of each pocket firm before they can '
-    'collapse. What began as a dense lump is left full of fixed holes, which '
-    'is why well-made bread is light.',
+    'Halden has fourteen crates of apples and Verin has six. Halden gives '
+    'five of his crates to Verin. The question is how many crates Verin has '
+    'now. Verin began with six crates, and the five that Halden handed over '
+    'are added to them. Six plus five is eleven. Verin now has eleven crates '
+    'of apples.',
 
-    'A town gains more from repairing its old bridge than from building a '
-    'second one, for three reasons. First, the repair costs less and can be '
-    'done in stages, so the crossing is never fully closed. Second, one '
-    'well-kept bridge is cheaper to maintain than two that each fall slowly '
-    'into disrepair. Third, a new bridge draws building to the far bank and '
-    'spreads the town thin before it can pay for the services that spread '
-    'demands. The case for a second bridge rests on growth that may not come; '
-    'the case for repair rests on a crossing that is already needed now.',
+    'One belric is worth three sarns, and one covan is worth four belrics. '
+    'The question is how many sarns one covan is worth. A covan is four '
+    'belrics, and each of those belrics is three sarns. Four times three is '
+    'twelve. One covan is therefore worth twelve sarns.',
 ]
 
 _EXEMPLAR_POOLS = {
@@ -146,21 +141,18 @@ _EXEMPLAR_INSTRUCTIONS = {
              'that protects a colleague and a truth that protects himself.',
     'conversation': 'Write a terse exchange in which two colleagues settle how '
                     'to ship two orders.',
-    'definition': 'Write dictionary entries defining two real financial terms.',
+    'definition': 'Write dictionary entries defining three invented units of '
+                  'measure with exact conversion relations.',
     'description': 'Write a factual description of how a hand plane works.',
-    'reasoning': 'Explain, in order, why bread rises when it is baked.',
+    'reasoning': 'State the facts of a small trade, pose the question, and '
+                 'work in order to the answer.',
 }
 
 _PAIR_EXEMPLAR = (
-    'How does a lock and key work?',
-    'A pin-tumbler lock holds a row of small spring-loaded pins that cross the '
-    'gap between the outer case and the inner plug, jamming the plug so it '
-    'cannot turn. Each pin is cut into two pieces at a different height. When '
-    'the right key is pushed in, its ridges lift every pin so that each cut '
-    'lines up exactly with the gap between the case and the plug. With every '
-    'cut aligned, nothing crosses the gap and the plug is free to turn and '
-    'draw back the bolt. A wrong key lifts the pins to the wrong heights, so '
-    'at least one still crosses the gap and the plug stays locked.',
+    'Merla has nine baskets of eggs and Dorn has four. Merla gives three '
+    'baskets to Dorn. How many baskets of eggs does Dorn have now?',
+    'Dorn started with four baskets and received three more from Merla, so '
+    'Dorn now has seven baskets of eggs.',
 )
 
 
@@ -195,72 +187,111 @@ def pair_example_turns():
     ]
 
 
+def _facts_clause(grounding):
+    return (
+        ' The text must stay consistent with every one of these facts, '
+        'weaving them in naturally rather than listing or enumerating them: '
+        '%s' % ' '.join(grounding['facts'])
+    )
+
+
+def _answer_clause(grounding):
+    derivation = ''
+    if grounding['derivation']:
+        derivation = ' (derivation: %s)' % '; '.join(grounding['derivation'])
+    return (
+        ' The correct answer to the question "%s" is %s%s; the text must '
+        'work toward and state that answer, never a different one.'
+        % (grounding['question'], grounding['answer'], derivation)
+    )
+
+
 def _prose_prompt(random_generator):
-    domain = random_generator.choice(seeds.SUBJECT_DOMAINS)
+    grounding = worldgen.sample_grounding(random_generator, 'fragment')
     return (
         'Write %s in a %s tone: %s, drawn from %s, told from %s. The story '
         'must have a plot: a character who wants something, an obstacle or '
-        'opposition, a turning point, and a definite outcome. Give the '
-        'characters names. Be concrete and specific.' % (
+        'opposition, a turning point, and a definite outcome. Use the people '
+        'and places named in the facts as the characters and setting.%s' % (
             random_generator.choice(seeds.LENGTH_BANDS),
             random_generator.choice(seeds.TONES),
             random_generator.choice(seeds.STORY_SITUATIONS),
-            domain,
+            random_generator.choice(seeds.SUBJECT_DOMAINS),
             random_generator.choice(seeds.POINTS_OF_VIEW),
+            _facts_clause(grounding),
         )
     )
 
 
 def _conversation_prompt(random_generator):
+    grounding = worldgen.sample_grounding(random_generator)
+    if grounding['kind'] == 'fragment':
+        return (
+            'Write a %s exchange of several turns between two of the people '
+            'named in the facts, in which they %s. Each turn must do work: a '
+            'proposal, an objection, a reason, or a concession, and the '
+            'exchange must reach a definite outcome. Begin each turn with the '
+            'speaker name and a colon.%s' % (
+                random_generator.choice(seeds.TONES),
+                random_generator.choice(seeds.DIALOGUE_GOALS),
+                _facts_clause(grounding),
+            )
+        )
     name_a = seeds.invented_name(random_generator)
     name_b = seeds.invented_name(random_generator)
-    domain = random_generator.choice(seeds.SUBJECT_DOMAINS)
     return (
-        'Write a %s exchange of several turns, set in the world of %s, in '
-        'which %s and %s %s. Each turn must do work: a proposal, an objection, '
-        'a reason, or a concession, and the exchange must reach a definite '
-        'outcome. Begin each turn with the speaker name and a colon.' % (
-            random_generator.choice(seeds.TONES), domain, name_a, name_b,
-            random_generator.choice(seeds.DIALOGUE_GOALS),
+        'Write a %s exchange of several turns in which %s and %s work out the '
+        'question "%s" together from the facts, one proposing steps and the '
+        'other checking them, until they agree on the answer. Begin each turn '
+        'with the speaker name and a colon.%s%s' % (
+            random_generator.choice(seeds.TONES), name_a, name_b,
+            grounding['question'], _facts_clause(grounding),
+            _answer_clause(grounding),
         )
     )
 
 
 def _definition_prompt(random_generator):
-    count = random_generator.choice([2, 2, 3])
-    domain = random_generator.choice(seeds.SUBJECT_DOMAINS)
+    grounding = worldgen.sample_grounding(random_generator, 'ratio')
+    units = grounding['units']
     return (
-        'Write dictionary entries defining %d real terms from %s. Choose terms '
-        'that belong together. Define each in genus-and-differentia form (a '
-        'headword is a kind of thing that has some distinguishing property), '
-        'accurately and consistently with the others.' % (count, domain)
+        'Write dictionary entries defining the units of measure %s, %s, and '
+        '%s, in genus-and-differentia form (a headword is a kind of thing '
+        'that has some distinguishing property). The entries must state the '
+        'exact conversion relations between the units and agree with each '
+        'other precisely.%s' % (
+            units[0], units[1], units[2], _facts_clause(grounding),
+        )
     )
 
 
 def _description_prompt(random_generator):
-    domain = random_generator.choice(seeds.SUBJECT_DOMAINS)
+    grounding = worldgen.sample_grounding(random_generator, 'fragment')
     relation_kinds = random_generator.sample(
         seeds.RELATION_KINDS, random_generator.choice([2, 3])
     )
     return (
-        'Write a %s factual description of a real thing, place, or process '
-        'from %s, making its %s relations clear. Use plain declarative '
-        'sentences, no narrative, and no fixed template. Name the subject '
-        'plainly and be accurate.' % (
-            random_generator.choice(seeds.TONES), domain,
+        'Write a %s factual description of the people, places, and things '
+        'named in the facts, making their %s relations clear. Use plain '
+        'declarative sentences, no narrative, and no fixed template.%s' % (
+            random_generator.choice(seeds.TONES),
             ', '.join(relation_kinds),
+            _facts_clause(grounding),
         )
     )
 
 
 def _reasoning_prompt(random_generator):
-    domain = random_generator.choice(seeds.SUBJECT_DOMAINS)
+    kind = random_generator.choice(['transfer', 'ratio', 'order'])
+    grounding = worldgen.sample_grounding(random_generator, kind)
     return (
-        'Take a real question, process, or claim from %s and %s. Keep the '
-        'order strict: each sentence should follow from the ones before it, '
-        'and the conclusion should rest on the steps given. Be accurate and '
-        'concrete, not vague or figurative.' % (
-            domain, random_generator.choice(seeds.REASONING_MODES),
+        'State the facts below plainly, pose the question "%s", and %s. Keep '
+        'the order strict: each sentence should follow from the ones before '
+        'it, and the conclusion should rest on the steps given.%s%s' % (
+            grounding['question'],
+            random_generator.choice(seeds.REASONING_MODES),
+            _facts_clause(grounding),
+            _answer_clause(grounding),
         )
     )
 
@@ -286,40 +317,37 @@ _PAIR_FORMAT = (
     'ASSISTANT: <the response>'
 )
 
-_PAIR_TASKS = [
-    'The user asks the assistant to explain how or why something in %s works, '
-    'and the assistant gives a clear, correctly ordered explanation.',
-    'The user asks the assistant how to do a specific task in %s, and the '
-    'assistant gives ordered, practical steps.',
-    'The user asks the assistant to compare two real things in %s, and the '
-    'assistant lays out the differences and reaches a judgement.',
-    'The user asks the assistant what a real term in %s means, and the '
-    'assistant defines it precisely and gives a short example.',
-    'The user asks the assistant a factual question about %s, and the '
-    'assistant answers directly and correctly.',
-    'The user describes a real situation in %s and asks for advice, and the '
-    'assistant gives specific, reasoned advice.',
-    'The user gives the assistant a short passage about %s and asks for a '
-    'summary, and the assistant summarizes it faithfully.',
-    'The user gives the assistant an awkward sentence about %s and asks to '
-    'rewrite it more clearly, and the assistant rewrites it.',
-    'The user asks the assistant to list and organize things in %s, and the '
-    'assistant gives an organized list with a short reason for the grouping.',
-    'The user poses a small reasoning problem set in %s, and the assistant '
-    'works through it in order to a definite answer.',
-]
-
-
 def build_pair_prompt(random_generator):
-    """Return a prompt that yields one instruction and response pair."""
-    task = random_generator.choice(_PAIR_TASKS)
-    domain = random_generator.choice(seeds.SUBJECT_DOMAINS)
-    instruction = task % domain
+    """Return a prompt that yields one grounded instruction and response pair.
+
+    The user turn must contain the grounding facts and the question, so the
+    pair is answerable from its own context, and the assistant's answer is
+    fixed by the program-derived ground truth, so the pair cannot teach a
+    wrong conclusion. Half the pairs ask for the bare answer with brief
+    working; half ask the assistant to explain the solution step by step.
+    """
+    grounding = worldgen.sample_grounding(random_generator)
+    if random_generator.random() < 0.5:
+        style = (
+            'The assistant answers directly, with at most one sentence of '
+            'working.'
+        )
+    else:
+        style = (
+            'The assistant explains the solution step by step, each step '
+            'following from the facts, before stating the answer.'
+        )
     return (
-        'Create one instruction and response pair for a helpful, knowledgeable '
-        'assistant. %s The instruction should read like something a real '
-        'person would ask, and the response should be genuinely helpful and '
-        'correct.%s' % (instruction, _PAIR_FORMAT)
+        'Create one instruction and response pair for a helpful assistant. '
+        'The user message must state all of these facts in its own words and '
+        'then ask: "%s" The facts: %s %s The correct answer is %s%s; the '
+        'response must reach and state exactly that answer.%s' % (
+            grounding['question'], ' '.join(grounding['facts']), style,
+            grounding['answer'],
+            (' (derivation: %s)' % '; '.join(grounding['derivation'])
+             if grounding['derivation'] else ''),
+            _PAIR_FORMAT,
+        )
     )
 
 

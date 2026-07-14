@@ -41,14 +41,20 @@ def _load_pretrained(config, device):
     return model, gpt_config
 
 
-def _save(model, config, gpt_config, step, checkpoint_directory, name):
+def _save(model, config, gpt_config, step, checkpoint_directory, name,
+          train_loss=None, validation_loss=None, best_validation=None):
     import torch
 
     base_model = getattr(model, '_orig_mod', model)
+    if best_validation is not None and best_validation == float('inf'):
+        best_validation = None
     torch.save(
         {
             'model': base_model.state_dict(),
             'step': step,
+            'train_loss': train_loss,
+            'validation_loss': validation_loss,
+            'best_validation': best_validation,
             'model_config': to_dict(config.model),
             'vocabulary_size': gpt_config.vocabulary_size,
         },
@@ -191,8 +197,27 @@ def _train(config, finetune_config, tokenizer, name, checkpoint_directory):
             cursor += 1
         return chosen
 
+    import json as json_module
+
+    history_path = checkpoint_directory / 'history.jsonl'
+    if history_path.exists():
+        history_path.unlink()
+
+    def record_history(step, train_loss, validation_loss):
+        with open(history_path, 'a') as handle:
+            handle.write(json_module.dumps({
+                'step': step,
+                'train_loss': round(train_loss, 4),
+                'validation_loss': (
+                    round(validation_loss, 4)
+                    if validation_loss is not None else None
+                ),
+            }) + '\n')
+
     best_validation = float('inf')
     patience = 0
+    step = 0
+    accumulated_loss = 0.0
     model.train()
     for step in range(total_steps):
         current_learning_rate = learning_rate_at(step)
@@ -236,6 +261,7 @@ def _train(config, finetune_config, tokenizer, name, checkpoint_directory):
                 model, dataset, validation_indices, finetune_config.batch_size,
                 device, autocast,
             )
+            record_history(step, accumulated_loss, validation_loss)
             logger.info(
                 'finetune %s step %d  val loss %.4f (best %.4f)',
                 name, step, validation_loss, best_validation,
@@ -245,7 +271,8 @@ def _train(config, finetune_config, tokenizer, name, checkpoint_directory):
                 patience = 0
                 _save(
                     model, config, gpt_config, step, checkpoint_directory,
-                    'ckpt_best.pt',
+                    'ckpt_best.pt', accumulated_loss, validation_loss,
+                    best_validation,
                 )
             else:
                 patience += 1
@@ -253,8 +280,17 @@ def _train(config, finetune_config, tokenizer, name, checkpoint_directory):
                     logger.info('finetune %s early stopping at step %d', name, step)
                     break
 
-    _save(model, config, gpt_config, total_steps, checkpoint_directory,
-          'ckpt_last.pt')
+    final_validation = None
+    if validation_indices:
+        final_validation = _validation_loss(
+            model, dataset, validation_indices, finetune_config.batch_size,
+            device, autocast,
+        )
+        if final_validation < best_validation:
+            best_validation = final_validation
+    record_history(step, accumulated_loss, final_validation)
+    _save(model, config, gpt_config, step, checkpoint_directory,
+          'ckpt_last.pt', accumulated_loss, final_validation, best_validation)
     logger.info('finetune variant %s complete -> %s', name, checkpoint_directory)
     del model
 

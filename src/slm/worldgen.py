@@ -38,6 +38,18 @@ MATERIALS = [
     'brass', 'elm', 'pine', 'steel',
 ]
 
+COUNTABLE_GOODS = [
+    'sacks of grain', 'coils of rope', 'clay jars', 'bolts of cloth',
+    'crates of apples', 'bundles of firewood', 'barrels of cider',
+    'boxes of nails', 'baskets of eggs', 'sheets of tin',
+]
+
+ORDER_DIMENSIONS = [
+    ('older', 'younger', 'the oldest'),
+    ('taller', 'shorter', 'the tallest'),
+    ('heavier', 'lighter', 'the heaviest'),
+]
+
 _TEMPLATES = {
     'lives': [
         '%(person)s lives at %(place)s.',
@@ -238,6 +250,149 @@ def world_documents(seed, count):
         sentences, _ = _fragment(world, random_generator)
         documents.append(' '.join(sentences))
     return documents
+
+
+def _invented_unit(random_generator, taken):
+    while True:
+        unit = seeds.invented_name(random_generator).lower()
+        if unit not in taken:
+            taken.add(unit)
+            return unit
+
+
+def _transfer_puzzle(random_generator):
+    giver = seeds.invented_name(random_generator)
+    receiver = seeds.invented_name(random_generator)
+    while receiver == giver:
+        receiver = seeds.invented_name(random_generator)
+    goods = random_generator.choice(COUNTABLE_GOODS)
+    start_giver = random_generator.randint(8, 30)
+    start_receiver = random_generator.randint(2, 15)
+    given = random_generator.randint(2, start_giver - 2)
+    facts = [
+        '%s has %d %s.' % (giver, start_giver, goods),
+        '%s has %d %s.' % (receiver, start_receiver, goods),
+        '%s gives %d %s to %s.' % (giver, given, goods, receiver),
+    ]
+    random_generator.shuffle(facts)
+    form = random_generator.choice(['left', 'received', 'total'])
+    if form == 'left':
+        question = 'How many %s does %s have now?' % (goods, giver)
+        answer = start_giver - given
+        derivation = ['%d - %d = %d' % (start_giver, given, answer)]
+    elif form == 'received':
+        question = 'How many %s does %s have now?' % (goods, receiver)
+        answer = start_receiver + given
+        derivation = ['%d + %d = %d' % (start_receiver, given, answer)]
+    else:
+        question = 'How many %s do they have between them?' % goods
+        answer = start_giver + start_receiver
+        derivation = [
+            'the transfer does not change the total',
+            '%d + %d = %d' % (start_giver, start_receiver, answer),
+        ]
+    return {
+        'kind': 'transfer', 'facts': facts, 'question': question,
+        'answer': str(answer), 'derivation': derivation,
+    }
+
+
+def _ratio_puzzle(random_generator):
+    taken = set()
+    small = _invented_unit(random_generator, taken)
+    middle = _invented_unit(random_generator, taken)
+    large = _invented_unit(random_generator, taken)
+    first_ratio = random_generator.randint(2, 8)
+    second_ratio = random_generator.randint(2, 6)
+    quantity = random_generator.randint(2, 6)
+    facts = [
+        'One %s is worth %d %ss.' % (middle, first_ratio, small),
+        'One %s is worth %d %ss.' % (large, second_ratio, middle),
+    ]
+    random_generator.shuffle(facts)
+    if random_generator.random() < 0.5:
+        question = 'How many %ss is one %s worth?' % (small, large)
+        answer = first_ratio * second_ratio
+        derivation = ['%d * %d = %d' % (second_ratio, first_ratio, answer)]
+    else:
+        question = 'How many %ss are %d %ss worth?' % (small, quantity, large)
+        answer = first_ratio * second_ratio * quantity
+        derivation = [
+            'one %s is %d * %d = %d %ss' % (
+                large, second_ratio, first_ratio,
+                second_ratio * first_ratio, small,
+            ),
+            '%d * %d = %d' % (quantity, second_ratio * first_ratio, answer),
+        ]
+    return {
+        'kind': 'ratio', 'facts': facts, 'question': question,
+        'answer': str(answer), 'derivation': derivation,
+        'units': [small, middle, large],
+        'ratios': [first_ratio, second_ratio],
+    }
+
+
+def _order_puzzle(random_generator):
+    names = []
+    while len(names) < 4:
+        name = seeds.invented_name(random_generator)
+        if name not in names:
+            names.append(name)
+    comparative, inverse, superlative = random_generator.choice(
+        ORDER_DIMENSIONS
+    )
+    order = list(names)
+    random_generator.shuffle(order)
+    facts = []
+    for upper, lower in zip(order, order[1:]):
+        if random_generator.random() < 0.5:
+            facts.append('%s is %s than %s.' % (upper, comparative, lower))
+        else:
+            facts.append('%s is %s than %s.' % (lower, inverse, upper))
+    random_generator.shuffle(facts)
+    question = 'Who is %s?' % superlative
+    derivation = [' > '.join(order)]
+    return {
+        'kind': 'order', 'facts': facts, 'question': question,
+        'answer': order[0], 'derivation': derivation,
+    }
+
+
+def _fragment_grounding(random_generator):
+    world = sample_world(random_generator, people=4, places=4, objects=6)
+    sentences, facts = _fragment(world, random_generator)
+    question, answer, _ = _make_question(world, facts, random_generator)
+    return {
+        'kind': 'fragment', 'facts': sentences, 'question': question,
+        'answer': answer, 'derivation': None,
+    }
+
+
+_PUZZLE_KINDS = {
+    'transfer': _transfer_puzzle,
+    'ratio': _ratio_puzzle,
+    'order': _order_puzzle,
+}
+
+
+def sample_grounding(random_generator, kind=None):
+    """Return one program-generated grounding for the LLM writer.
+
+    A grounding is a set of facts that are consistent by construction, plus a
+    question whose answer the program derived, so the LLM can be asked to
+    write text (in any register) that stays consistent with the facts and,
+    where it works a problem, reaches the correct answer without having to
+    solve anything itself. Kinds: fragment (a small relational world),
+    transfer (countable goods arithmetic), ratio (invented units with exact
+    conversion factors), order (a comparison chain with inverted surfaces).
+    """
+    if kind is None:
+        kind = random_generator.choice(
+            ['fragment', 'fragment', 'transfer', 'ratio', 'order']
+        )
+    if kind == 'fragment':
+        return _fragment_grounding(random_generator)
+    return _PUZZLE_KINDS[kind](random_generator)
 
 
 def score_binding_answer(task, output):

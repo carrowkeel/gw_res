@@ -92,31 +92,44 @@ graph and not implemented in this pass.
 
 ## Text types
 
-Implemented: prose, conversation, definition, description, and reasoning. Every
-prompt is anchored in a sampled subject domain (everyday life, work, science,
-history, the arts, relationships, health, technology, food, travel, law,
-sport, money, ideas, craft, and the land), so the corpus ranges over real
-subjects instead of a single kind of scene. Each type also carries a
-structural demand:
+Implemented: prose, conversation, definition, description, and reasoning.
+**Every prompt of every type is grounded in a program-generated fact set from
+`slm.worldgen`**: the program authors the logic (a consistent world fragment,
+or a puzzle whose answer it derived by construction) and the LLM only writes
+it up in the requested register. The same grounding can surface as any type -
+a transfer puzzle as a dialogue or a reasoning piece, a world fragment as a
+story or a description. The rationale: a small model can only learn patterns
+that are actually there, and text whose internal logic is loose or
+contradictory gives it nothing stable to learn, so all generated text is
+anchored to facts that cannot contradict each other, with correct answers
+supplied to the writer rather than left for it to compute.
 
-- **prose**: a story with a plot (a character who wants something, an obstacle,
-  a turning point, an outcome), not static description.
-- **conversation**: a multi-turn exchange in which each turn does work and the
-  exchange reaches a definite outcome.
-- **definition**: real terms defined accurately in genus-and-differentia form.
-- **description**: a factual account of a real thing or process, made clear
-  through stated relations.
-- **reasoning**: strictly ordered explanation or argument (cause before effect,
-  steps in order, reasons by weight), so the logic is real rather than poetic.
+Grounding kinds: **fragment** (a small relational world of invented people,
+places, and objects), **transfer** (countable-goods arithmetic), **ratio**
+(invented units with exact conversion factors), **order** (a comparison chain
+with direction-inverting surface forms). Per type:
 
-Instruction pairs span many task kinds (explain, how-to, compare, define,
-answer, advise, summarize, rewrite, list, reason), each set in a sampled
-domain, so the model learns to perform tasks and not only to describe.
+- **prose**: a story with a plot whose characters and setting are the people
+  and places named in the grounding facts.
+- **conversation**: either two people from a fragment handling its facts, or
+  two speakers working a puzzle through to its (given) correct answer.
+- **definition**: dictionary entries for invented units of measure with exact
+  conversion relations, in genus-and-differentia form.
+- **description**: a dry factual account of a fragment's people, places, and
+  things, made clear through stated relations.
+- **reasoning**: state a puzzle's facts, pose its question, and work in strict
+  order to the given correct answer.
 
-The reasoning-heavy document types that need a stronger generator (legal and
-argumentative dialogue, notation-logic and puzzle documents) and the bounded
-real-domain signal-injection experiment remain described in the intent graph
-as deferred work.
+Instruction pairs are grounded the same way: the user message must state the
+facts and ask the question, so the pair is answerable from its own context,
+and the response is fixed to the program-derived answer, so no pair can teach
+a wrong conclusion. Surface content stays varied through sampled domains,
+tones, forms, and lengths (documents now run up to several paragraphs).
+
+The LLM-as-stylist layer does not yet round-trip-verify the rendered text
+against the grounding (see the intent graph); the reasoning-heavy document
+types needing a stronger generator and the bounded real-domain
+signal-injection experiment also remain deferred there.
 
 ## Install
 
@@ -402,11 +415,26 @@ two is older or larger, including surface forms that invert the stated
 direction). Nothing is answerable from world knowledge, so the exact-match
 score isolates whether the model can bind and retrieve information given in
 context. This is the coherence gauge that gates the later experiments
-(notably testing the graph input/output training approach), and it is the
-first working piece of the program-as-author generation mechanism: the same
-module can emit consistency-bearing documents (`worldgen.world_documents`)
-for future mixing into the corpus. Preview tasks with
+(notably testing the graph input/output training approach). The same module
+grounds all generation (see Text types above). Preview tasks with
 `python -m slm.worldgen --seed 7`.
+
+### One-document run summary
+
+After evaluation, `eval/summary.md` (with `summary.json` beside it) collects
+the whole run into one printable document: model and corpus sizes with the
+tokens-per-parameter ratio, pretrain and finetune loss curves (persisted to
+`checkpoints/*/history.jsonl` during training) with perplexities, a
+comparable-loss table that scores every checkpoint on the same held-out data
+(corpus validation stream, where a rise after finetuning indicates
+forgetting, and held-out instruction pairs, where a drop indicates
+instruction gain), and the judged and exact-match evaluation scores per
+stage. It is written automatically at the end of the evaluate stage and can
+be regenerated any time:
+
+```bash
+python -m slm.report --config runs/world/mini/config.yaml
+```
 
 Score parsing tolerates verbose judge replies, the completion rubric forces low
 grades for text that is not well-formed English, and the report names the judge
@@ -457,7 +485,8 @@ src/slm/
   finetune.py      stage 4: supervised finetuning
   infer.py         load a checkpoint and sample
   chat.py          interactive prompt loop over a checkpoint
-  evaluate.py      stage 5: judge, probe, interrogation
+  evaluate.py      stage 5: judge, probes, binding
+  report.py        one-document run summary (losses, curves, scores)
   pipeline.py      local orchestrator
 slurm/
   submit.py            dependency-chained sbatch submitter

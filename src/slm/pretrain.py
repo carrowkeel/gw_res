@@ -175,8 +175,24 @@ def run(config, packed_directory=None, checkpoint_root=None):
         }
         torch.save(payload, checkpoint_directory / ('%s.pt' % tag))
 
+    history_path = checkpoint_directory / 'history.jsonl'
+    if start_step == 0 and is_main_process() and history_path.exists():
+        history_path.unlink()
+
+    def record_history(step, train_loss, validation_loss):
+        if not is_main_process():
+            return
+        with open(history_path, 'a') as handle:
+            handle.write(json.dumps({
+                'step': step,
+                'train_loss': round(train_loss, 4),
+                'validation_loss': round(validation_loss, 4),
+            }) + '\n')
+
     model.train()
     interval_start = time.time()
+    step = start_step
+    accumulated_loss = 0.0
     for step in range(start_step, pretrain_config.maximum_steps):
         current_learning_rate = learning_rate_at(step, pretrain_config)
         for group in optimizer.param_groups:
@@ -224,6 +240,7 @@ def run(config, packed_directory=None, checkpoint_root=None):
                 gathered = torch.tensor(validation_loss, device=device)
                 distributed.all_reduce(gathered, op=distributed.ReduceOp.SUM)
                 validation_loss = gathered.item() / get_world_size()
+            record_history(step, accumulated_loss, validation_loss)
             if validation_loss < best_validation - 1e-4:
                 best_validation = validation_loss
                 evaluations_since_best = 0
@@ -249,6 +266,7 @@ def run(config, packed_directory=None, checkpoint_root=None):
             save_checkpoint(step, best_validation, 'ckpt_last')
 
     final_validation = estimate_validation_loss()
+    record_history(step, accumulated_loss, final_validation)
     if final_validation < best_validation:
         best_validation = final_validation
         save_checkpoint(pretrain_config.maximum_steps, final_validation, 'ckpt_best')
