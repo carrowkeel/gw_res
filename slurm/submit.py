@@ -27,6 +27,7 @@ import os
 import re
 import subprocess
 import sys
+import uuid
 from pathlib import Path
 
 import yaml
@@ -34,7 +35,7 @@ import yaml
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPOSITORY_ROOT / 'src'))
 
-from slm.config import load_config
+from slm.config import load_config, save_config
 
 RUNG_STAGES = ['tokenizer', 'data', 'pretrain', 'finetune', 'evaluate']
 
@@ -383,21 +384,62 @@ def submit_world(config_path, dry_run):
         print('To stop early, scancel the pending gen, merge, and rung jobs.')
 
 
+def _resolve_run_id(explicit, dry_run):
+    """Pick the run id that suffixes this submission's output tree.
+
+    An explicit --run-id targets an existing run so its stages can be rerun. A
+    real submit without one gets a fresh id, so repeated submissions never
+    collide. A dry run without one uses a fixed placeholder, so previewing the
+    job graph does not litter runs/ with a new directory every time.
+    """
+    if explicit:
+        return explicit
+    if dry_run:
+        return 'dryrun'
+    return uuid.uuid4().hex[:8]
+
+
+def _materialize_run_config(config):
+    """Write the run's resolved config and return its path.
+
+    Every submitted job loads this file independently on the cluster, so the
+    suffixed out_dir is baked in here once and all stages write into the same
+    run tree without the run id having to travel on each command line.
+    """
+    resolved_path = config.out_dir / 'config.resolved.yaml'
+    save_config(config, resolved_path)
+    return resolved_path
+
+
 def main():
     parser = argparse.ArgumentParser(description='Submit pipeline to Slurm')
     parser.add_argument('--config', required=True)
     parser.add_argument('--stages', default=','.join(DEFAULT_STAGES))
     parser.add_argument('--dry-run', action='store_true')
+    parser.add_argument(
+        '--run-id',
+        help='reuse an existing run by its id to rerun stages against the same '
+             'output tree; omit to start a fresh run under a generated id',
+    )
     arguments = parser.parse_args()
-    config = load_config(arguments.config)
+
+    run_id = _resolve_run_id(arguments.run_id, arguments.dry_run)
+    config = load_config(arguments.config, run_id=run_id)
+    resolved_path = _materialize_run_config(config)
+    print('run id:          %s' % run_id)
+    print('output tree:     %s' % config.out_dir)
+    print('resolved config: %s' % resolved_path)
+    print('rerun later with: --run-id %s' % run_id)
+    print()
+
     if config.scale.rungs:
-        submit_world(arguments.config, arguments.dry_run)
+        submit_world(str(resolved_path), arguments.dry_run)
         return
     stages = [stage.strip() for stage in arguments.stages.split(',') if stage.strip()]
     unknown = set(stages) - set(ALL_STAGES)
     if unknown:
         sys.exit('unknown stages: %s' % sorted(unknown))
-    submit(arguments.config, stages, arguments.dry_run)
+    submit(str(resolved_path), stages, arguments.dry_run)
 
 
 if __name__ == '__main__':

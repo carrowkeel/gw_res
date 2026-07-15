@@ -258,6 +258,24 @@ variables already set in the submitting shell, then an explicit
 any shipped config; YAML silently keeps only the last occurrence of a
 duplicate key, which previously discarded a user's populated cache map.
 
+Each submission is isolated by a run id. `slurm/submit.py` resolves a run id
+(a fresh `uuid4` hex fragment by default, or an explicit `--run-id` to target
+an existing run) and passes it to `load_config(path, run_id=...)`, which
+suffixes `project.out_dir` and rebases `slurm.log_dir` onto the suffixed tree
+while leaving `project.corpus_dir` — an input reference to an already-frozen
+corpus — untouched. The submitter materializes the fully resolved config at
+`<out_dir>/config.resolved.yaml` and points every job's `--wrap` at that file,
+so the suffixed paths are baked in once rather than threaded onto each command
+line and read consistently by jobs that load the config independently on the
+cluster. The consequence is that resubmitting a config never overwrites an
+earlier run and independent runs (for example a `mini` train and a full `world`
+ladder) can proceed concurrently; rerunning a subset of stages against an
+existing run means passing that run's id back with `--run-id`. The scale-world
+ladder inherits this automatically, since it derives `world_out` and every
+rung's `out_dir`/`corpus_dir` from the already-suffixed `project.out_dir`. The
+local `pipeline.py` accepts the same `--run-id` but leaves `out_dir`
+unsuffixed by default, since a stable directory suits smoke tests.
+
 ### Diagnostics: `slm.sample` and `slm.inspect`
 
 `slm.sample` loads a checkpoint (pretrain by default) and prints raw

@@ -5,6 +5,7 @@ configuration object so parameters live in one place and the Slurm layer can
 inspect resource requests without importing heavy dependencies.
 """
 
+import copy
 from dataclasses import dataclass, field, fields, is_dataclass
 from pathlib import Path
 
@@ -269,13 +270,45 @@ def _build_section(section_type, data):
     return section_type(**arguments)
 
 
-def load_config(path):
-    """Load a Config from a YAML file, validating section keys."""
+def apply_run_id(raw, run_id):
+    """Return a copy of a raw config with its output tree suffixed by run_id.
+
+    Only outputs move. project.out_dir gains the suffix, and slurm.log_dir is
+    rebased onto the suffixed tree when it sits under the old out_dir. An input
+    reference, project.corpus_dir, is left untouched so a run can read an
+    already-frozen corpus while writing into its own suffixed tree. Passing a
+    falsy run_id returns raw unchanged, so callers can always route through here.
+    """
+    if not run_id:
+        return raw
+    raw = copy.deepcopy(raw)
+    project = dict(raw.get('project') or {})
+    original = str(project.get('out_dir') or ProjectConfig().out_dir).rstrip('/')
+    suffixed = '%s-%s' % (original, run_id)
+    project['out_dir'] = suffixed
+    raw['project'] = project
+    slurm = raw.get('slurm')
+    if isinstance(slurm, dict) and isinstance(slurm.get('log_dir'), str):
+        log_dir = slurm['log_dir'].rstrip('/')
+        if log_dir == original or log_dir.startswith(original + '/'):
+            slurm = dict(slurm)
+            slurm['log_dir'] = suffixed + log_dir[len(original):]
+            raw['slurm'] = slurm
+    return raw
+
+
+def load_config(path, run_id=None):
+    """Load a Config from a YAML file, validating section keys.
+
+    When run_id is given, the run's output tree is suffixed with it (see
+    apply_run_id) so concurrent or repeated runs never overwrite each other.
+    """
     with open(path) as handle:
         raw = yaml.safe_load(handle) or {}
     unknown = set(raw) - set(_SECTION_TYPES)
     if unknown:
         raise ValueError('Unknown config sections: %s' % sorted(unknown))
+    raw = apply_run_id(raw, run_id)
     sections = {}
     for name, section_type in _SECTION_TYPES.items():
         sections[name] = _build_section(section_type, raw.get(name))
