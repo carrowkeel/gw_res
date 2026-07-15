@@ -31,7 +31,9 @@ types, and the deferred experiments) lives in the intent graph at
 | finetune | `slm.finetune` | yes | `checkpoints/sft/ckpt_last.pt` |
 | evaluate | `slm.evaluate` | yes (vLLM) | `eval/report_{pretrain,sft}.{json,md}` |
 
-All artifacts land under `project.out_dir`, for example `runs/poc/`.
+All artifacts land under `project.out_dir`, for example `runs/poc/`. The Slurm
+submitter suffixes this with a per-run id (see Run isolation and reruns) so
+runs never overwrite each other, for example `runs/poc-a1b2c3d4/`.
 
 Instruction following is learned twice over. First it is co-trained during
 pretraining: the generated prompt and response pairs are rendered in a light
@@ -161,6 +163,33 @@ sbatch --job-name slm-generate --mem 64G --cpus-per-task 8 --gres gpu:l40s:1 \
 
 `slurm/example_stage.sbatch` runs a single stage by hand.
 
+### Run isolation and reruns
+
+Every submission writes into its own tree. The submitter suffixes
+`project.out_dir` with a run id — a fresh random id by default — so
+resubmitting a config never overwrites an earlier run and two runs (say a
+`mini` train and a full `world` ladder) can proceed at once without colliding.
+The chosen id and the resolved output tree are printed at the top of the
+submission, and the fully resolved config is materialized at
+`<out_dir>/config.resolved.yaml`; every job reads that file, so the suffixed
+paths are baked in.
+
+To rerun stages against an existing run instead of starting a new one, pass its
+id back with `--run-id`:
+
+```bash
+python slurm/submit.py --config configs/scale/mini.yaml            # -> runs/world/mini-a1b2c3d4
+python slurm/submit.py --config configs/scale/mini.yaml \
+  --run-id a1b2c3d4 --stages evaluate                              # reruns eval on that same tree
+```
+
+Only outputs are suffixed. `project.corpus_dir` is an input reference to an
+already-frozen corpus and is left untouched, so a run can read an existing
+corpus (for example `runs/world/corpus_full`) while writing to its own tree.
+The local runner (`python -m slm.pipeline`) takes the same `--run-id` flag but
+leaves `out_dir` unsuffixed by default, since a stable directory is convenient
+for smoke tests.
+
 ### Parallel generation across GPUs
 
 Set `generate.workers` above one and the submitter turns the generate stage
@@ -190,10 +219,12 @@ worker that cannot reach its target within the per-run attempt cap exits
 non-zero, and the merge refuses to run until every worker has produced its full
 share, naming any worker that is short. Because the merge depends on the array
 via `afterok`, a failed worker leaves the merge and later stages pending; to
-recover, resubmit the same command once the cause is addressed:
+recover, resubmit against the **same run** once the cause is addressed — pass
+its id with `--run-id` so the topped-up output lands in the original tree
+rather than a new one:
 
 ```bash
-python slurm/submit.py --config configs/scale/world.yaml
+python slurm/submit.py --config configs/scale/world.yaml --run-id <id>
 ```
 
 Completed workers detect their finished output and exit immediately without
@@ -302,15 +333,15 @@ can stop the whole process early if a rung looks wrong:
 
 ```bash
 python slurm/submit.py --config configs/scale/world.yaml --dry-run
-python slurm/submit.py --config configs/scale/world.yaml
-# inspect a rung's frozen corpus snapshot at any point
-python -m slm.inspect --config runs/world/pico/config.yaml
+python slurm/submit.py --config configs/scale/world.yaml   # prints the run id, e.g. world-a1b2c3d4
+# inspect a rung's frozen corpus snapshot at any point (fill in the printed run id)
+python -m slm.inspect --config runs/world-<id>/pico/config.yaml
 # stop early if a rung reveals a problem
 scancel --name slm-gen-nano --name slm-merge-nano   # and later rung jobs
 ```
 
 Each rung writes its own tokenizer, packed data, checkpoints, and evaluation
-reports under `runs/world/<rung>/`; the submitter materializes each rung's
+reports under `runs/world-<id>/<rung>/`; the submitter materializes each rung's
 resolved config there. Finetuning is consolidated to one configured approach
 (pretraining-data replay at half the micro-batches, plus validation early
 stopping), so each rung runs a single finetune job; the variant-sweep harness
@@ -433,7 +464,7 @@ stage. It is written automatically at the end of the evaluate stage and can
 be regenerated any time:
 
 ```bash
-python -m slm.report --config runs/world/mini/config.yaml
+python -m slm.report --config runs/world/mini-<id>/config.resolved.yaml
 ```
 
 Score parsing tolerates verbose judge replies, the completion rubric forces low
@@ -447,7 +478,7 @@ To read raw completions directly, use `slm.sample`, which completes
 in-distribution seeds with the base pretrained model:
 
 ```bash
-python -m slm.sample --config runs/world/pico/config.yaml
+python -m slm.sample --config runs/world-<id>/pico/config.yaml
 ```
 
 To probe a built model interactively by hand, use `slm.chat`, a prompt loop
@@ -458,7 +489,7 @@ switches between the two models in place. These are tiny models, so this runs
 fine on CPU; grab an interactive allocation rather than the login node:
 
 ```bash
-srun --pty python -m slm.chat --config runs/world/pico/config.yaml
+srun --pty python -m slm.chat --config runs/world-<id>/pico/config.yaml
 ```
 
 ## Layout

@@ -91,9 +91,14 @@ def main():
     parser = argparse.ArgumentParser(description='Run the pipeline locally')
     parser.add_argument('--config', required=True)
     parser.add_argument('--stages', default=','.join(DEFAULT_STAGES))
+    parser.add_argument(
+        '--run-id',
+        help='suffix the output tree with this id to keep runs separate; omit '
+             'to write to the config out_dir as-is',
+    )
     arguments = parser.parse_args()
     stages = [stage.strip() for stage in arguments.stages.split(',') if stage.strip()]
-    run(load_config(arguments.config), stages)
+    run(load_config(arguments.config, run_id=arguments.run_id), stages)
 
 
 if __name__ == '__main__':
