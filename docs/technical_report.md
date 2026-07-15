@@ -368,38 +368,79 @@ since the format is plain text). These tokens are currently unused by
 forward compatibility; otherwise they are a candidate for removal, since they
 trace back to the abandoned role-token SFT design.
 
-## Next steps, ranked by decision strength
+## Result so far: scale buys fluency, not binding (node 47)
 
-1. **Run the cheap scale-up on the existing corpus.** Submit
-   `configs/scale/mini.yaml` (tokenizer through evaluate, no generation) to
-   train the `mini` model on `runs/world/corpus_full` with the consolidated
-   finetune (replay + early stop). The run ends with `eval/summary.md`, the
-   one-document result to compare against the full-rung micro numbers; watch
-   the in-context binding exact-match score, the coherence gauge for the
-   graph-experiment gate (node 45). Note the existing corpus predates
-   grounded generation, so this run measures the scale lever only.
+The cheap scale-up has run. `configs/scale/mini.yaml` trained the `mini`
+preset (about fourteen million non-embedding parameters, 2.4x micro) on the
+existing ungrounded `runs/world/corpus_full` with the consolidated finetune
+(replay + early stop). Two things resolved and one did not:
 
-2. **Run the next full generation with grounded prompts.** The next
-   `world.yaml` ladder run generates the grounded, longer-document corpus
-   (every prompt fed by worldgen facts and answers, node 46). This is the
-   data lever: compare its rungs' summaries against the current corpus's,
-   especially binding and the reasoning-content quality.
+- **The finetune pathology is cured.** Finetuning now beats pretraining on
+  every axis instead of degrading it. The comparable-loss table shows corpus
+  validation loss falling slightly through finetuning (2.079 to 2.070, replay
+  fully suppressed forgetting) while held-out pair loss dropped (1.594 to
+  1.560, real instruction gain). Capacity plus the non-destructive recipe did
+  exactly what they were meant to.
+- **Fluency scaled with parameters.** Grammar rose to about 7.0 and coherence
+  to about 6.6, roughly a point and a half over micro.
+- **Binding did not move.** In-context binding exact-match stayed at 0.03
+  (one in thirty-two, chance), the accuracy probe stayed near 1.5, and the
+  binding completions do not engage the question at all. Parameters bought no
+  context-binding on incoherent data.
 
-3. **Extend worldgen.** In rough order: round-trip verification of rendered
-   text against the grounding, discarding mismatches (node 38, the missing
-   safeguard now that all text flows through the renderer); multi-hop
-   questions (combining two stated facts); a persistent world shared across
-   many documents (node 36).
+One caveat keeps this from being a pure capability verdict: the binding probe
+uses worldgen-invented names in a facts-then-question format absent from this
+ungrounded corpus, so the number confounds cannot-bind with
+never-saw-this-distribution. The grounded corpus removes that confound, so the
+grounded ladder gives the first fair reading. Net: the bottleneck has moved
+from model capacity to data coherence.
 
-4. **Open the graph-experiment gate when binding clears its floor
-   (node 45).** Once binding exact-match rises well clear of the guessing
-   floor and holds across rungs, start the graph input/output comparisons
-   using the existing graph pipeline unchanged.
+## Milestones for the next phase
 
-5. **Cosmetic cleanup**: remove the vestigial `<|user|>`/`<|assistant|>`
-   tokens from `TokenizerConfig.special_tokens`; they are remnants of the
-   abandoned role-token design and nothing reads them.
+**M1 — grounded ladder as the data-coherence test (node 48).** Submit
+`configs/scale/world.yaml`; run-id isolation (see the submitter section) keeps
+it off the existing runs. It generates the grounded corpus (node 46) across
+the pico-to-full ladder, and because the full rung is already the `mini`
+preset it is a clean same-size comparison against the mini-on-ungrounded
+result above. Opening gate: in-context binding exact-match clearly above the
+guessing floor, a target near 0.25 on the full rung across both stages,
+sustained across rungs, with comparison and retrieval sub-scores read apart
+(retrieval clearing zero is the stronger signal). Secondary: grammar and
+coherence at least matching the mini-on-ungrounded baseline, and the followed
+score rising, since grounded pairs state the facts in the user turn. The
+pico-to-full rungs give a binding-versus-data-fraction curve for free.
 
-Items 1 and 2 are ready to run. Items 3 and 4 are design-bearing and should
-have their scope confirmed before implementation, consistent with the
-project's workflow rule that code is written only when explicitly asked for.
+**M2 — scale on grounded data, axis chosen empirically (node 49).** Do not
+pre-commit to more-data versus bigger-model; read the lever off the M1 curve.
+Binding rising with data fraction across rungs means the corpus is the
+constraint (generate more grounded data); binding above floor but flat means
+capacity is the constraint (step the preset up to a roughly forty-million
+small model, reusing the grounded corpus at two to four effective epochs as
+the mini rung did, since tokens per non-embedding parameter is about fifteen).
+Gate: binding at least 0.5 and coherence at least 7.
+
+**M3 — graph input/output experiments (node 50), gated on M1's binding gate
+(node 45).** Graph-versus-flat comparisons are uninterpretable while the flat
+model cannot bind referents from plain context, so this waits for M1 to open
+the gate and M2 to widen the margin. The graph stages already exist; the study
+holds parameters and token budget fixed and varies only the context
+representation over shared worlds, scoring binding (node 33) and coherence.
+
+The ordering logic: data before scale, because this run showed scale alone
+leaves binding at zero; graph last, because it needs a non-zero baseline to
+measure against.
+
+## Smaller follow-ups
+
+- **Extend worldgen.** Round-trip verification of rendered text against the
+  grounding, discarding mismatches (node 38, the missing safeguard now that
+  all text flows through the renderer); multi-hop binding questions; a
+  persistent world shared across many documents (node 36).
+- **Cosmetic cleanup**: remove the vestigial `<|user|>`/`<|assistant|>` tokens
+  from `TokenizerConfig.special_tokens`; they are remnants of the abandoned
+  role-token design and nothing reads them.
+
+M1 is ready to run. M2's axis is decided by M1's data, and M3 and the worldgen
+extensions are design-bearing and should have their scope confirmed before
+implementation, consistent with the project's rule that code is written only
+when explicitly asked for.
