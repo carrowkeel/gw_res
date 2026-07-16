@@ -193,7 +193,9 @@ def run(config, packed_directory=None, checkpoint_root=None):
     interval_start = time.time()
     step = start_step
     accumulated_loss = 0.0
+    trained_this_run = False
     for step in range(start_step, pretrain_config.maximum_steps):
+        trained_this_run = True
         current_learning_rate = learning_rate_at(step, pretrain_config)
         for group in optimizer.param_groups:
             group['lr'] = current_learning_rate
@@ -265,12 +267,17 @@ def run(config, packed_directory=None, checkpoint_root=None):
         if step > 0 and step % pretrain_config.checkpoint_interval == 0:
             save_checkpoint(step, best_validation, 'ckpt_last')
 
-    final_validation = estimate_validation_loss()
-    record_history(step, accumulated_loss, final_validation)
-    if final_validation < best_validation:
-        best_validation = final_validation
-        save_checkpoint(pretrain_config.maximum_steps, final_validation, 'ckpt_best')
-    save_checkpoint(pretrain_config.maximum_steps, final_validation, 'ckpt_last')
+    # Resuming an already-complete checkpoint runs zero iterations; writing a
+    # final record here would append a spurious step=start_step, loss=0.0 row to
+    # history.jsonl and needlessly re-save checkpoints. Only close out the run
+    # when real training happened this invocation.
+    if trained_this_run:
+        final_validation = estimate_validation_loss()
+        record_history(step, accumulated_loss, final_validation)
+        if final_validation < best_validation:
+            best_validation = final_validation
+            save_checkpoint(pretrain_config.maximum_steps, final_validation, 'ckpt_best')
+        save_checkpoint(pretrain_config.maximum_steps, final_validation, 'ckpt_last')
     if is_main_process():
         logger.info('pretrain complete, best validation %.4f', best_validation)
     if is_distributed():

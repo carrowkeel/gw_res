@@ -111,6 +111,28 @@ def _command_base(config):
     )
 
 
+GENERATE_ATTEMPTS = 3
+
+
+def _with_retries(command, attempts=GENERATE_ATTEMPTS):
+    """Wrap a generation command so a transient worker crash retries in place.
+
+    A single worker whose vLLM engine fails to initialize (a transient GPU or
+    node fault) otherwise fails the array, which fails the merge's afterok and
+    blocks the whole rung. Because the generator is resumable and idempotent
+    (a finished worker detects its output and exits at once), retrying the same
+    command in the same allocation tops up only what is missing. After the last
+    attempt the non-zero exit is preserved so a genuinely stuck worker still
+    surfaces rather than yielding a short corpus.
+    """
+    return (
+        'n=0; until %s; do n=$((n+1)); '
+        'if [ $n -ge %d ]; then echo "generate failed after %d attempts" >&2; '
+        'exit 1; fi; echo "generate attempt $n failed; retrying" >&2; sleep 15; '
+        'done' % (command, attempts, attempts)
+    )
+
+
 def _stage_command(stage, config, config_path):
     if stage in ('pretrain', 'graph_pretrain'):
         gres = config.slurm.pretrain_gres or config.slurm.gres
@@ -228,7 +250,7 @@ def submit(config_path, stages, dry_run):
             sbatch = _sbatch_arguments(
                 config, 'slm-generate', _stage_gres('generate', config)
             )
-            command = _stage_command('generate', config, config_path)
+            command = _with_retries(_stage_command('generate', config, config_path))
             sbatch += ['--array', '0-%d' % (config.generate.workers - 1)]
             array_job = _submit_job(stage, sbatch, command, previous_job, dry_run)
             merge_sbatch = _sbatch_arguments(config, 'slm-generate-merge', None)
@@ -299,7 +321,29 @@ def _write_rung_config(base_raw, rung, world_out, texts_target, pairs_target,
     return path
 
 
-def submit_world(config_path, dry_run):
+def _generation_frozen(world_out, name):
+    """True once this rung's corpus snapshot has been merged and frozen.
+
+    The merge writes pretrain shards and the sft file into corpus_<name>; their
+    presence means generation and merge for this rung are done, so a resume can
+    skip straight to (or past) its training stages without regenerating.
+    """
+    corpus = world_out / ('corpus_%s' % name)
+    shards = list((corpus / 'pretrain').glob('shard_*.jsonl'))
+    return bool(shards) and (corpus / 'sft' / 'sft.jsonl').exists()
+
+
+def _training_done(world_out, name):
+    """True once this rung's evaluate stage has written its report.
+
+    report_*.json is the last artifact a rung produces, so its presence means
+    the rung is complete end to end and a resume can skip it entirely.
+    """
+    reports = list((world_out / name / 'eval').glob('report_*.json'))
+    return bool(reports)
+
+
+def submit_world(config_path, dry_run, resume=False):
     """Submit a progressive scale ladder that shares one growing corpus.
 
     Generation runs in cumulative chunks. When a chunk's fraction of the corpus
@@ -324,7 +368,23 @@ def submit_world(config_path, dry_run):
     full_texts = config.generate.number_of_texts
     full_pairs = config.generate.number_of_pairs
 
+    # Without --resume, refuse to resubmit into a tree that already holds frozen
+    # corpora: re-running the merges there would refreeze the smaller rungs with
+    # the now-larger accumulated worker output and corrupt the nested ladder.
+    if not resume:
+        frozen = [
+            rung['name'] for rung in rungs
+            if _generation_frozen(world_out, rung['name'])
+        ]
+        if frozen:
+            sys.exit(
+                'run tree %s already has frozen rungs (%s); pass --resume to '
+                'finish the remaining ones, or omit --run-id to start a fresh '
+                'run' % (world_out, ', '.join(frozen))
+            )
+
     previous_merge = None
+    submitted_any = False
     for rung in rungs:
         name = rung['name']
         fraction = float(rung['fraction'])
@@ -332,30 +392,41 @@ def submit_world(config_path, dry_run):
         pairs_target = max(1, round(fraction * full_pairs))
         corpus_dir = world_out / ('corpus_%s' % name)
 
-        array_sbatch = _sbatch_arguments(
-            config, 'slm-gen-%s' % name, config.slurm.gres
-        )
-        array_sbatch += ['--array', '0-%d' % (workers - 1)]
-        gen_command = (
-            '%s python3 -m slm.generate --config %s --worker-count %d '
-            '--worker-index $SLURM_ARRAY_TASK_ID --max-texts %d --max-pairs %d'
-            % (_command_base(config), config_path, workers, texts_target,
-               pairs_target)
-        )
-        array_job = _submit_job(
-            'gen-%s' % name, array_sbatch, gen_command, previous_merge, dry_run
-        )
+        if resume and _training_done(world_out, name):
+            print('resume: rung %s already complete, skipping' % name)
+            previous_merge = None
+            continue
 
-        merge_sbatch = _sbatch_arguments(config, 'slm-merge-%s' % name, None)
-        merge_command = (
-            '%s python3 -m slm.generate --config %s --merge --merge-out %s '
-            '--max-texts %d --max-pairs %d'
-            % (_command_base(config), config_path, corpus_dir, texts_target,
-               pairs_target)
-        )
-        merge_job = _submit_job(
-            'merge-%s' % name, merge_sbatch, merge_command, array_job, dry_run
-        )
+        if resume and _generation_frozen(world_out, name):
+            # Corpus already frozen but training did not finish: keep the frozen
+            # snapshot untouched and run only the training stages off it.
+            print('resume: rung %s corpus frozen, running stages only' % name)
+            merge_job = None
+        else:
+            array_sbatch = _sbatch_arguments(
+                config, 'slm-gen-%s' % name, config.slurm.gres
+            )
+            array_sbatch += ['--array', '0-%d' % (workers - 1)]
+            gen_command = _with_retries(
+                '%s python3 -m slm.generate --config %s --worker-count %d '
+                '--worker-index $SLURM_ARRAY_TASK_ID --max-texts %d --max-pairs %d'
+                % (_command_base(config), config_path, workers, texts_target,
+                   pairs_target)
+            )
+            array_job = _submit_job(
+                'gen-%s' % name, array_sbatch, gen_command, previous_merge, dry_run
+            )
+
+            merge_sbatch = _sbatch_arguments(config, 'slm-merge-%s' % name, None)
+            merge_command = (
+                '%s python3 -m slm.generate --config %s --merge --merge-out %s '
+                '--max-texts %d --max-pairs %d'
+                % (_command_base(config), config_path, corpus_dir, texts_target,
+                   pairs_target)
+            )
+            merge_job = _submit_job(
+                'merge-%s' % name, merge_sbatch, merge_command, array_job, dry_run
+            )
         previous_merge = merge_job
 
         rung_config_path = _write_rung_config(
@@ -379,7 +450,11 @@ def submit_world(config_path, dry_run):
                 '%s-%s' % (stage, name), sbatch, command, previous_stage,
                 dry_run,
             )
-    if not dry_run:
+        submitted_any = True
+
+    if resume and not submitted_any:
+        print('resume: nothing to do, every rung is already complete')
+    elif not dry_run:
         print('\nScale-world submitted. Track with: squeue -u $USER')
         print('To stop early, scancel the pending gen, merge, and rung jobs.')
 
@@ -421,10 +496,23 @@ def main():
         help='reuse an existing run by its id to rerun stages against the same '
              'output tree; omit to start a fresh run under a generated id',
     )
+    parser.add_argument(
+        '--resume', action='store_true',
+        help='for a scale ladder, skip rungs already complete in the target '
+             'run and finish only the incomplete ones; requires --run-id',
+    )
     arguments = parser.parse_args()
+
+    if arguments.resume and not arguments.run_id:
+        sys.exit('--resume needs --run-id to name the run tree to resume')
 
     run_id = _resolve_run_id(arguments.run_id, arguments.dry_run)
     config = load_config(arguments.config, run_id=run_id)
+    if arguments.resume and not config.scale.rungs:
+        sys.exit(
+            '--resume applies to scale ladders; for a single-config run, rerun '
+            'stages with --run-id %s --stages <stages>' % run_id
+        )
     resolved_path = _materialize_run_config(config)
     print('run id:          %s' % run_id)
     print('output tree:     %s' % config.out_dir)
@@ -433,7 +521,7 @@ def main():
     print()
 
     if config.scale.rungs:
-        submit_world(str(resolved_path), arguments.dry_run)
+        submit_world(str(resolved_path), arguments.dry_run, arguments.resume)
         return
     stages = [stage.strip() for stage in arguments.stages.split(',') if stage.strip()]
     unknown = set(stages) - set(ALL_STAGES)
