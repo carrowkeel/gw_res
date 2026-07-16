@@ -276,6 +276,26 @@ rung's `out_dir`/`corpus_dir` from the already-suffixed `project.out_dir`. The
 local `pipeline.py` accepts the same `--run-id` but leaves `out_dir`
 unsuffixed by default, since a stable directory suits smoke tests.
 
+A scale ladder that dies partway is finished with `--resume` against its run
+id. `submit_world` classifies each rung from artifacts on disk: a rung whose
+`eval/report_*.json` exists is complete and skipped; a rung whose
+`corpus_<name>` snapshot is frozen (pretrain shards plus the sft file) but
+which never finished training runs its stages only, off the existing snapshot;
+a rung with no frozen snapshot re-runs generation, merge, and stages. It
+deliberately does not re-run a finished rung's merge, because the merge writes
+all accumulated worker output uncapped (the per-rung fraction is enforced by
+generation timing, not by the merge), so refreezing a smaller rung after the
+workers have grown toward the full target would corrupt the nested corpora.
+For the same reason a bare `--run-id` into a tree that already holds frozen
+rungs is refused, and `--resume` is required to continue it. Independently,
+each generation array command is wrapped in a bounded retry loop: because the
+generator is resumable and idempotent, a worker whose vLLM engine fails to
+initialize (a transient GPU or node fault) retries in place and tops up, rather
+than failing the array and stalling the rung's merge and every stage chained
+behind it. This addressed a real failure where one worker of sixteen crashed at
+engine init, failed the full rung's `merge` via `afterok`, and left the rung's
+`slurm_logs` empty with no model built.
+
 ### Diagnostics: `slm.sample` and `slm.inspect`
 
 `slm.sample` loads a checkpoint (pretrain by default) and prints raw

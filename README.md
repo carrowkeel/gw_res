@@ -190,6 +190,31 @@ The local runner (`python -m slm.pipeline`) takes the same `--run-id` flag but
 leaves `out_dir` unsuffixed by default, since a stable directory is convenient
 for smoke tests.
 
+### Resuming a partial scale ladder
+
+If a scale-world run dies partway — most often a transient worker crash that
+fails a rung's generation and leaves later rungs blocked — resubmit the same
+config against its run id with `--resume`:
+
+```bash
+python slurm/submit.py --config configs/scale/world.yaml --run-id 359bf5fe --resume
+```
+
+Resume walks the rungs and, per rung, skips work that is already done: a rung
+whose evaluate report exists is skipped entirely; a rung whose corpus snapshot
+is frozen but which never finished training runs its stages only, off the
+existing snapshot; a rung with no frozen snapshot re-runs generation (which
+tops up from durable worker output), merge, and stages. Crucially it does **not**
+re-run the finished rungs' merges, which would refreeze the smaller rungs with
+the now-larger accumulated worker output and corrupt the nested ladder — for
+that reason a bare `--run-id` into a tree that already holds frozen rungs is
+refused, and `--resume` is required to continue it.
+
+Generation is also self-healing per worker: each gen array command retries a
+few times in its allocation before failing, so a single worker whose vLLM
+engine fails to initialize (a transient GPU or node fault) tops itself up
+instead of failing the array's `afterok` and stalling the whole rung.
+
 ### Parallel generation across GPUs
 
 Set `generate.workers` above one and the submitter turns the generate stage
