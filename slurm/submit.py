@@ -111,25 +111,29 @@ def _command_base(config):
     )
 
 
-GENERATE_ATTEMPTS = 3
+GENERATE_REQUEUES = 2
 
 
-def _with_retries(command, attempts=GENERATE_ATTEMPTS):
-    """Wrap a generation command so a transient worker crash retries in place.
+def _requeue_on_failure(command, max_requeues=GENERATE_REQUEUES):
+    """Wrap a generation array task to requeue a failure onto a fresh allocation.
 
-    A single worker whose vLLM engine fails to initialize (a transient GPU or
-    node fault) otherwise fails the array, which fails the merge's afterok and
-    blocks the whole rung. Because the generator is resumable and idempotent
-    (a finished worker detects its output and exits at once), retrying the same
-    command in the same allocation tops up only what is missing. After the last
-    attempt the non-zero exit is preserved so a genuinely stuck worker still
-    surfaces rather than yielding a short corpus.
+    A worker whose vLLM engine fails to initialize is almost always hitting a
+    bad or contended GPU, so retrying in the same allocation cannot help and can
+    make it worse (a died EngineCore leaves GPU memory pinned). Requeue instead
+    reschedules the task onto a new node; because the generator is resumable the
+    requeued run tops up from durable output. SLURM_RESTART_COUNT bounds the
+    attempts. Requeue is best-effort: if the cluster forbids it the task simply
+    fails and the afterany merge then reports the short worker loudly, rather
+    than the whole rung stalling on a silently dropped merge.
     """
     return (
-        'n=0; until %s; do n=$((n+1)); '
-        'if [ $n -ge %d ]; then echo "generate failed after %d attempts" >&2; '
-        'exit 1; fi; echo "generate attempt $n failed; retrying" >&2; sleep 15; '
-        'done' % (command, attempts, attempts)
+        '%s; rc=$?; '
+        'if [ $rc -ne 0 ] && [ "${SLURM_RESTART_COUNT:-0}" -lt %d ]; then '
+        'echo "gen task failed (rc=$rc); requeueing onto a fresh allocation '
+        '(restart ${SLURM_RESTART_COUNT:-0})" >&2; '
+        'scontrol requeue "${SLURM_ARRAY_JOB_ID:-$SLURM_JOB_ID}_'
+        '${SLURM_ARRAY_TASK_ID:-0}" 2>/dev/null || true; sleep 10; fi; '
+        'exit $rc' % (command, max_requeues)
     )
 
 
@@ -188,13 +192,16 @@ def _sbatch_arguments(config, job_name, gres):
     return arguments
 
 
-def _submit_job(label, sbatch, command, previous_job, dry_run):
+def _submit_job(label, sbatch, command, previous_job, dry_run,
+                dependency_type='afterok'):
     if previous_job:
         if isinstance(previous_job, (list, tuple)):
             dependency = ':'.join(str(job) for job in previous_job)
         else:
             dependency = str(previous_job)
-        sbatch = sbatch + ['--dependency', 'afterok:%s' % dependency]
+        sbatch = sbatch + [
+            '--dependency', '%s:%s' % (dependency_type, dependency)
+        ]
     sbatch = sbatch + ['--wrap', command]
 
     printable = ' '.join(
@@ -250,15 +257,21 @@ def submit(config_path, stages, dry_run):
             sbatch = _sbatch_arguments(
                 config, 'slm-generate', _stage_gres('generate', config)
             )
-            command = _with_retries(_stage_command('generate', config, config_path))
-            sbatch += ['--array', '0-%d' % (config.generate.workers - 1)]
+            command = _requeue_on_failure(
+                _stage_command('generate', config, config_path)
+            )
+            sbatch += ['--array', '0-%d' % (config.generate.workers - 1), '--requeue']
             array_job = _submit_job(stage, sbatch, command, previous_job, dry_run)
             merge_sbatch = _sbatch_arguments(config, 'slm-generate-merge', None)
             merge_command = '%s python3 -m slm.generate --config %s --merge' % (
                 _command_base(config), config_path
             )
+            # afterany, not afterok: the merge's own completeness check is the
+            # real gate, so it should run even if a worker task exited non-zero
+            # and report the shortfall rather than be silently dropped.
             previous_job = _submit_job(
-                'generate-merge', merge_sbatch, merge_command, array_job, dry_run
+                'generate-merge', merge_sbatch, merge_command, array_job, dry_run,
+                dependency_type='afterany',
             )
             continue
         if stage == 'finetune':
@@ -406,8 +419,8 @@ def submit_world(config_path, dry_run, resume=False):
             array_sbatch = _sbatch_arguments(
                 config, 'slm-gen-%s' % name, config.slurm.gres
             )
-            array_sbatch += ['--array', '0-%d' % (workers - 1)]
-            gen_command = _with_retries(
+            array_sbatch += ['--array', '0-%d' % (workers - 1), '--requeue']
+            gen_command = _requeue_on_failure(
                 '%s python3 -m slm.generate --config %s --worker-count %d '
                 '--worker-index $SLURM_ARRAY_TASK_ID --max-texts %d --max-pairs %d'
                 % (_command_base(config), config_path, workers, texts_target,
@@ -424,8 +437,13 @@ def submit_world(config_path, dry_run, resume=False):
                 % (_command_base(config), config_path, corpus_dir, texts_target,
                    pairs_target)
             )
+            # afterany, not afterok: the merge validates completeness itself and
+            # refuses a short pool, so it must run even when a worker task exited
+            # non-zero (and requeued out) instead of being silently dropped and
+            # stalling every stage behind it.
             merge_job = _submit_job(
-                'merge-%s' % name, merge_sbatch, merge_command, array_job, dry_run
+                'merge-%s' % name, merge_sbatch, merge_command, array_job, dry_run,
+                dependency_type='afterany',
             )
         previous_merge = merge_job
 
