@@ -30,7 +30,11 @@ def render_instruction(prompt, response):
 
 
 def iterate_pairs(config):
-    """Yield (prompt, response) tuples from the generated pairs file."""
+    """Yield (prompt, response, kind) tuples from the generated pairs file.
+
+    kind is the program-assigned task kind of the pair's grounding, or None
+    for pairs from corpora generated before kinds were recorded.
+    """
     path = config.corpus_sft_path
     if not path.exists():
         return
@@ -39,7 +43,7 @@ def iterate_pairs(config):
             stripped = line.strip()
             if stripped:
                 record = json.loads(stripped)
-                yield record['prompt'], record['response']
+                yield record['prompt'], record['response'], record.get('kind')
 
 
 def _dtype_for_vocabulary(vocabulary_size):
@@ -99,10 +103,24 @@ def prepare_pretrain(config):
                 documents.append(_wrap(tokenizer, text, dtype))
     logger.info('tokenized %d pretraining documents', len(documents))
 
-    instruction_documents = [
-        _wrap(tokenizer, render_instruction(prompt, response), dtype)
-        for prompt, response in iterate_pairs(config)
-    ]
+    # The co-trained instruction stream can be restricted to configured kinds,
+    # reserving the excluded kinds for the finetune stage (which always trains
+    # on all pairs), so finetuning teaches capabilities pretraining did not
+    # co-train rather than repeating the same distribution.
+    allowed_kinds = set(config.pretrain.instruction_kinds)
+    instruction_documents = []
+    excluded = 0
+    for prompt, response, kind in iterate_pairs(config):
+        if allowed_kinds and kind is not None and kind not in allowed_kinds:
+            excluded += 1
+            continue
+        instruction_documents.append(
+            _wrap(tokenizer, render_instruction(prompt, response), dtype)
+        )
+    if excluded:
+        logger.info(
+            'reserved %d pairs of excluded kinds for finetuning', excluded
+        )
     random_generator = numpy.random.default_rng(config.project.seed)
     documents, instruction_tokens = _mix_instructions(
         documents, instruction_documents,

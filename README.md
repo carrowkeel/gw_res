@@ -109,7 +109,16 @@ supplied to the writer rather than left for it to compute.
 Grounding kinds: **fragment** (a small relational world of invented people,
 places, and objects), **transfer** (countable-goods arithmetic), **ratio**
 (invented units with exact conversion factors), **order** (a comparison chain
-with direction-inverting surface forms). Per type:
+with direction-inverting surface forms and transitive pairwise questions).
+Worlds are sampled from eight domain lexicons (workshops, harbors, farms,
+markets, study, healing, inns, roads), each with its own places, objects, and
+goods, so the corpus does not collapse into one register; fragments state
+ages either relatively or in absolute years (so comparisons must sometimes be
+derived from numbers), and fragment questions span four categories:
+**retrieval** (read one stated fact back), **comparison**, **multihop**
+(compose two stated facts, e.g. where the owner of an object lives), and
+**notstated** (the correct answer is that the facts do not say - the pairs
+teach declining over fabricating). Per type:
 
 - **prose**: a story with a plot whose characters and setting are the people
   and places named in the grounding facts.
@@ -125,8 +134,14 @@ with direction-inverting surface forms). Per type:
 Instruction pairs are grounded the same way: the user message must state the
 facts and ask the question, so the pair is answerable from its own context,
 and the response is fixed to the program-derived answer, so no pair can teach
-a wrong conclusion. Surface content stays varied through sampled domains,
-tones, forms, and lengths (documents now run up to several paragraphs).
+a wrong conclusion. Each pair carries its task kind, and
+`pretrain.instruction_kinds` can restrict the co-trained instruction stream
+to a subset of kinds: the excluded kinds (in `world.yaml`, multihop and
+notstated) are then seen only by the finetune stage, which always trains on
+all pairs, so the pretrain-to-sft delta measures a capability finetuning
+actually added rather than a distribution co-training already taught.
+Surface content stays varied through sampled domains, tones, forms, and
+lengths (documents now run up to several paragraphs).
 
 The LLM-as-stylist layer does not yet round-trip-verify the rendered text
 against the grounding (see the intent graph); the reasoning-heavy document
@@ -449,31 +464,32 @@ torchrun --standalone --nproc_per_node=4 -m slm.pretrain --config configs/poc.ya
 
 Evaluation runs on the pretrained model and every finetune variant, writing a
 separate report for each (`report_pretrain` and `report_sft` or
-`report_sft_<variant>` per variant); a stage with no checkpoint is skipped. An
-existing model judges three ways, all over seeds and instructions that span
-the same subject domains generation uses (everyday life, work, science,
-history, arts, relationships, health, technology, and more), not a single
-topic: completions from fixed seeds, scored for grammar and coherence;
-task instructions (explain, how-to, compare, define, answer, advise,
-summarize, rewrite, list, reason), scored for coherence and whether the
-answer follows the request, correctly where it has a factual or practical
-answer; and a factual accuracy probe on fixed real-world questions, scored for
-correctness. Since generation now targets a knowledgeable model, the accuracy
-probe is a direct signal of what finetuning adds over the base pretrained
-model, though a model this small should be expected to know very little of it.
+`report_sft_<variant>` per variant); a stage with no checkpoint is skipped.
+The evaluation is matched to the grounded corpus: what the corpus trains is
+processing facts given in context, so that is what the headline sections
+measure, by exact match against program-derived answers, with no judge noise.
 
-A fourth measure needs no judge at all: the in-context binding probe. The
-`slm.worldgen` module programmatically samples small worlds of invented
-people, places, and objects whose facts are consistent by construction,
-verbalizes a fragment into a context paragraph, and asks a question whose
-exact answer the program knows (who owns a thing, where it is kept, which of
-two is older or larger, including surface forms that invert the stated
-direction). Nothing is answerable from world knowledge, so the exact-match
-score isolates whether the model can bind and retrieve information given in
-context. This is the coherence gauge that gates the later experiments
-(notably testing the graph input/output training approach). The same module
-grounds all generation (see Text types above). Preview tasks with
-`python -m slm.worldgen --seed 7`.
+- **Grounded instructions** (headline): tasks drawn from the same kind mix
+  the pairs train on - the user message states the facts and asks the
+  question, and the answer is exact-match scored per kind (retrieval,
+  comparison, multihop, notstated, transfer, ratio, order). The notstated
+  sub-score measures declining over fabricating when the facts do not contain
+  the answer. A judge additionally rates answer coherence so degraded English
+  is visible even when the gold token appears.
+- **In-context binding** (judge-free): `slm.worldgen` samples small worlds of
+  invented people, places, and objects whose facts are consistent by
+  construction, verbalizes a fragment into a context paragraph, and asks a
+  question whose exact answer the program knows. Tasks are stratified over
+  the four question categories and reported with per-kind sub-scores. This
+  is the coherence gauge that gates the later experiments (notably the graph
+  input/output approach). Preview tasks with `python -m slm.worldgen --seed 7`.
+- **Completions**: judged grammar and coherence over seeds half grounded
+  (openings cut from rendered world documents) and half generic.
+- **Out-of-distribution generalization** (demoted, explicitly labeled): the
+  earlier real-world instruction set and factual accuracy probe. The grounded
+  corpus deliberately contains none of this knowledge, so low scores are
+  expected; the accuracy probe reads as a contamination gauge (how much
+  real-world fact leaked from the generator), not a target.
 
 ### One-document run summary
 
@@ -484,9 +500,9 @@ tokens-per-parameter ratio, pretrain and finetune loss curves (persisted to
 comparable-loss table that scores every checkpoint on the same held-out data
 (corpus validation stream, where a rise after finetuning indicates
 forgetting, and held-out instruction pairs, where a drop indicates
-instruction gain), and the judged and exact-match evaluation scores per
-stage. It is written automatically at the end of the evaluate stage and can
-be regenerated any time:
+instruction gain), and the evaluation scores per stage with the exact-match
+grounded and binding columns first. It is written automatically at the end
+of the evaluate stage and can be regenerated any time:
 
 ```bash
 python -m slm.report --config runs/world/mini-<id>/config.resolved.yaml

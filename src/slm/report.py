@@ -143,13 +143,14 @@ def _evaluation_means(config):
         data = json.loads(path.read_text())
         rows.append({
             'stage': data.get('stage'),
+            'grounded': data.get('grounded', {}).get('exact_match'),
+            'binding': data.get('binding', {}).get('exact_match'),
             'grammar': data['completions']['means'].get('grammar'),
             'coherence': data['completions']['means'].get('coherence'),
             'instruction_coherence':
                 data['instructions']['means'].get('coherence'),
             'followed': data['instructions']['means'].get('followed'),
             'accuracy': data['probe'].get('mean_accuracy'),
-            'binding': data.get('binding', {}).get('exact_match'),
         })
     return rows
 
@@ -299,23 +300,26 @@ def write_summary(config):
     lines += ['## Evaluation scores', '']
     if evaluations:
         lines += [
-            '| stage | grammar | coherence | instr. coherence | followed | '
-            'accuracy | binding |',
-            '|---|---|---|---|---|---|---|',
+            '| stage | grounded | binding | grammar | coherence | '
+            'instr. coherence | followed | accuracy |',
+            '|---|---|---|---|---|---|---|---|',
         ]
         for row in evaluations:
-            lines.append('| %s | %s | %s | %s | %s | %s | %s |' % (
-                row['stage'], _round(row['grammar'], 2),
+            lines.append('| %s | %s | %s | %s | %s | %s | %s | %s |' % (
+                row['stage'], _round(row['grounded'], 2),
+                _round(row['binding'], 2), _round(row['grammar'], 2),
                 _round(row['coherence'], 2),
                 _round(row['instruction_coherence'], 2),
                 _round(row['followed'], 2), _round(row['accuracy'], 2),
-                _round(row['binding'], 2),
             ))
         lines += [
             '',
-            'Grammar, coherence, followed, and accuracy are judge scores from '
-            'one to ten; binding is exact-match from zero to one. Full '
-            'samples are in the per-stage report files beside this summary.',
+            'Grounded and binding are exact-match from zero to one over '
+            'program-derived answers (grounded instructions and in-context '
+            'binding); the rest are judge scores from one to ten, with '
+            'instruction and accuracy scores measuring out-of-distribution '
+            'generalization, not the training target. Per-kind sub-scores '
+            'are in the per-stage report files beside this summary.',
         ]
     else:
         lines.append('No evaluation reports found; run the evaluate stage.')

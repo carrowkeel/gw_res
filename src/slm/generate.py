@@ -349,15 +349,17 @@ def generate_pairs(config, worker_index=0, worker_count=1):
     with open(output_path, 'a') as handle:
         while kept < target and attempts < maximum_attempts:
             size = min(generate_config.batch_size, (target - kept) * 2 + 1)
-            user_prompts = [
+            prompt_batch = [
                 prompts.build_pair_prompt(random_generator)
                 for _ in range(size)
             ]
+            user_prompts = [prompt for prompt, _ in prompt_batch]
+            kinds = [kind for _, kind in prompt_batch]
             texts = _chat(
                 engine, sampling, system_prompt, user_prompts, example_turns
             )
             attempts += size
-            for text in texts:
+            for text, kind in zip(texts, kinds):
                 if kept >= target:
                     break
                 pair = prompts.split_pair(text)
@@ -375,7 +377,11 @@ def generate_pairs(config, worker_index=0, worker_count=1):
                     seen.add(fingerprint)
                 handle.write(
                     json.dumps(
-                        {'prompt': instruction, 'response': response},
+                        {
+                            'prompt': instruction,
+                            'response': response,
+                            'kind': kind,
+                        },
                         ensure_ascii=False,
                     )
                     + '\n'

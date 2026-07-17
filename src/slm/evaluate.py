@@ -1,14 +1,18 @@
-"""Stage five: evaluate the trained model with an existing model as judge.
+"""Stage five: evaluate the trained model, matched to the grounded corpus.
 
-Generation now targets a knowledgeable, multi-domain prompt-response model
-(the referent-free restriction is relaxed for this MVP; see node 41 in the
-intent graph), so evaluation is judged the same way: completions and
-instruction answers are scored for grammar, coherence, and whether they
-follow the request, over seeds and instructions spanning the same subject
-domains generation uses (not a single topic). A factual accuracy probe asks
-real questions and scores whether the answer is correct, which is now a
-direct, meaningful test of what finetuning adds over the base pretrained
-model, rather than a demoted or inverted measure.
+Generation is grounded: every document and pair is anchored in program-known
+facts from worldgen (node 46), so the headline evaluation supplies facts the
+same way and scores by exact match against program-derived answers, per task
+kind (retrieval, comparison, multihop, notstated, and the puzzle kinds). The
+notstated sub-score measures whether the model declines when the facts do not
+contain the answer or fabricates one in perfect form. Completions are judged
+on grammar and coherence over a mix of grounded and generic seeds.
+
+The earlier real-world instruction set and factual accuracy probe remain, but
+demoted to an explicitly labeled out-of-distribution generalization section:
+the grounded corpus deliberately contains no such knowledge, so low scores
+there are expected and the accuracy probe reads as a contamination gauge (how
+much real-world fact leaked from the generator), not as a target.
 
     python -m slm.evaluate --config runs/world/pico/config.yaml
 """
@@ -24,7 +28,7 @@ from .utils import ensure_directory, get_logger, set_seed
 
 logger = get_logger('evaluate')
 
-COMPLETION_SEEDS = [
+GENERIC_COMPLETION_SEEDS = [
     'The clerk had covered for his colleague twice that month, and',
     'By the time the loan came due, the interest had',
     'The recipe called for the dough to rest until',
@@ -42,6 +46,26 @@ COMPLETION_SEEDS = [
     'What began as a small workshop grew, within a decade, into',
     'The experiment failed the first time because the temperature',
 ]
+
+
+def _completion_seeds(config, random_generator):
+    """Return completion seeds, half grounded in worldgen and half generic.
+
+    Grounded seeds are openings cut from rendered world documents, so they sit
+    inside the corpus distribution; the generic half probes how the model
+    handles material from outside its world.
+    """
+    from . import worldgen
+
+    grounded = []
+    for document in worldgen.world_documents(
+        config.project.seed + 4, len(GENERIC_COMPLETION_SEEDS)
+    ):
+        words = document.split()
+        cut = random_generator.randint(8, min(14, max(9, len(words) - 1)))
+        grounded.append(' '.join(words[:cut]))
+    return grounded + list(GENERIC_COMPLETION_SEEDS)
+
 
 TASK_INSTRUCTIONS = [
     'Explain how compound interest works.',
@@ -168,7 +192,8 @@ def score_completions(config, student, engine, sampling):
     samples = []
     aggregate = {'grammar': [], 'coherence': []}
     seeds = _pick(
-        COMPLETION_SEEDS, eval_config.number_of_generation_samples,
+        _completion_seeds(config, random_generator),
+        eval_config.number_of_generation_samples,
         random_generator,
     )
     for seed in seeds:
@@ -222,11 +247,11 @@ def score_instructions(config, student, engine, sampling):
 def accuracy_probe(config, student, engine, sampling):
     """Score factual correctness on fixed real-world questions.
 
-    Generation now targets a knowledgeable model, so this is a direct
-    correctness check rather than a check for referent avoidance: an empty or
-    evasive answer scores low, a correct answer scores high. This is the
-    most direct test of what finetuning adds over the base pretrained model,
-    though a model this small should be expected to know very little of it.
+    The grounded corpus deliberately contains no real-world knowledge, so
+    this is a contamination gauge, not a target: a score near one means
+    essentially nothing leaked from the generator model, and movement upward
+    signals leakage (or, at scale, transfer) rather than success or failure
+    of training.
     """
     eval_config = config.eval
     random_generator = random.Random(config.project.seed + 2)
@@ -260,15 +285,80 @@ def accuracy_probe(config, student, engine, sampling):
     return {'results': results, 'mean_accuracy': _mean(scores)}
 
 
+def grounded_instructions(config, student, engine, sampling):
+    """Headline instruction eval: facts in the user turn, exact-match scored.
+
+    Tasks are drawn from the same grounded mix the pairs train on (retrieval,
+    comparison, multihop, notstated, transfer, ratio, order): the user message
+    states the facts and asks the question, and the answer is scored by exact
+    match against the program-derived gold, per kind. This measures the
+    processor capability the corpus actually trains, where the earlier
+    real-world instruction set measured knowledge the corpus deliberately
+    lacks. A judge additionally rates each answer's coherence so degraded
+    English is visible even when the gold token appears.
+    """
+    from . import worldgen
+
+    random_generator = random.Random(config.project.seed + 5)
+    eval_config = config.eval
+    count = max(1, eval_config.number_of_generation_samples // 2)
+    system_prompt = (
+        'A small language model answered a question from facts supplied in '
+        'the same message. Rate one axis from one to ten: coherence (is the '
+        'answer well-formed, sensible English?). Reply with exactly one '
+        'line:\ncoherence: <n>'
+    )
+    results = []
+    scores = []
+    by_kind = {}
+    coherence_values = []
+    for _ in range(count):
+        grounding = worldgen.sample_pair_grounding(random_generator)
+        prompt = '%s %s' % (
+            ' '.join(grounding['facts']), grounding['question']
+        )
+        answer = student.respond(
+            prompt, eval_config.max_new_tokens, eval_config.temperature,
+            eval_config.top_p, eval_config.repetition_penalty,
+        )
+        task = {
+            'answer': grounding['answer'],
+            'distractor': grounding.get('distractor'),
+        }
+        score = worldgen.score_binding_answer(task, answer)
+        verdict = _judge(
+            engine, sampling, system_prompt,
+            'QUESTION: %s\nANSWER: %s' % (prompt, answer),
+        )
+        coherence = _extract_score(verdict, 'coherence')
+        kind = grounding['task_kind']
+        by_kind.setdefault(kind, []).append(score)
+        scores.append(score)
+        coherence_values.append(coherence)
+        results.append({
+            'kind': kind, 'prompt': prompt, 'answer': grounding['answer'],
+            'output': answer.strip(), 'correct': score,
+            'coherence': coherence,
+        })
+    return {
+        'results': results,
+        'exact_match': _mean(scores),
+        'by_kind': {kind: _mean(values) for kind, values in by_kind.items()},
+        'coherence': _mean(coherence_values),
+    }
+
+
 def binding_probe(config, student):
     """Score in-context binding on program-generated tasks, judge-free.
 
     Each task supplies every needed fact in its context, about novel invented
     entities, so nothing is answerable from world knowledge; the gold answer
-    is known by construction and scored by exact match. This measures whether
-    the model can bind and retrieve information given in context, the
-    coherence gauge that gates the later experiments (see the intent graph),
-    and it costs no judge calls.
+    is known by construction and scored by exact match. Tasks are stratified
+    over the question categories, and per-kind sub-scores are reported:
+    retrieval and comparison read the context back, multihop composes two
+    stated facts, and notstated scores declining over fabricating when the
+    context does not contain the answer. This is the coherence gauge that
+    gates the later experiments (see the intent graph), at no judge cost.
     """
     from . import worldgen
 
@@ -278,6 +368,7 @@ def binding_probe(config, student):
     )
     results = []
     scores = []
+    by_kind = {}
     for task in tasks:
         prompt = '%s\nQuestion: %s\nAnswer:' % (
             task['context'], task['question']
@@ -288,11 +379,17 @@ def binding_probe(config, student):
         )
         score = worldgen.score_binding_answer(task, output)
         results.append({
-            'question': task['question'], 'answer': task['answer'],
-            'output': output.strip(), 'correct': score,
+            'kind': task['kind'], 'question': task['question'],
+            'answer': task['answer'], 'output': output.strip(),
+            'correct': score,
         })
         scores.append(score)
-    return {'results': results, 'exact_match': _mean(scores)}
+        by_kind.setdefault(task['kind'], []).append(score)
+    return {
+        'results': results,
+        'exact_match': _mean(scores),
+        'by_kind': {kind: _mean(values) for kind, values in by_kind.items()},
+    }
 
 
 def write_report(config, report):
@@ -304,17 +401,61 @@ def write_report(config, report):
 
     completion_means = report['completions']['means']
     instruction_means = report['instructions']['means']
+    grounded = report['grounded']
+    binding = report['binding']
+
+    def kind_lines(by_kind):
+        return [
+            '- %s: %s' % (kind, by_kind[kind]) for kind in sorted(by_kind)
+        ]
+
     lines = [
         '# Evaluation report: %s' % config.project.name,
         '',
-        '> Stage: %s. Judge model: %s. Completions and instructions cover the '
-        'same subject domains generation uses. The accuracy probe is a direct '
-        'test of factual knowledge, so it is the clearest signal of what '
-        'finetuning adds over the base pretrained model, though a model this '
-        'small should be expected to know very little of it.'
+        '> Stage: %s. Judge model: %s. The headline sections supply facts in '
+        'context and score exact match against program-derived answers, '
+        'matching the grounded corpus. The out-of-distribution section asks '
+        'real-world questions the corpus deliberately does not teach: low '
+        'scores there are expected, and the accuracy probe reads as a '
+        'contamination gauge, not a target.'
         % (report['stage'], report['judge_model']),
         '',
-        '## Completions (one to ten)',
+        '## Grounded instructions (exact match, zero to one)',
+        '- exact match: %s' % grounded['exact_match'],
+        '- answer coherence (judged, one to ten): %s' % grounded['coherence'],
+        '',
+        '### By task kind',
+    ]
+    lines += kind_lines(grounded['by_kind'])
+    lines += [
+        '',
+        '### Sample answers',
+    ]
+    for result in grounded['results'][:6]:
+        lines.append(
+            '- [%s] Q: %s\n  gold: %s\n  model: %r (%s)'
+            % (result['kind'], result['prompt'], result['answer'],
+               result['output'], 'correct' if result['correct'] else 'wrong')
+        )
+    lines += [
+        '',
+        '## In-context binding (exact match, zero to one)',
+        '- exact match: %s' % binding['exact_match'],
+        '',
+        '### By task kind',
+    ]
+    lines += kind_lines(binding['by_kind'])
+    lines += ['']
+    for result in binding['results'][:6]:
+        lines.append(
+            '- [%s] Q: %s\n  gold: %s\n  model: %r (%s)'
+            % (result['kind'], result['question'], result['answer'],
+               result['output'],
+               'correct' if result['correct'] else 'wrong')
+        )
+    lines += [
+        '',
+        '## Completions (judged, one to ten)',
         '- grammar: %s' % completion_means.get('grammar'),
         '- coherence: %s' % completion_means.get('coherence'),
         '',
@@ -324,36 +465,25 @@ def write_report(config, report):
         lines.append('- %r' % sample['output'])
     lines += [
         '',
-        '## Instruction following (one to ten)',
-        '- coherence: %s' % instruction_means.get('coherence'),
-        '- followed: %s' % instruction_means.get('followed'),
+        '## Out-of-distribution generalization (judged, one to ten)',
         '',
-        '### Sample instruction answers',
+        'Real-world instructions and facts the grounded corpus does not '
+        'contain. Expected low; movement here signals contamination or '
+        'transfer, not the training target.',
+        '- instruction coherence: %s' % instruction_means.get('coherence'),
+        '- instruction followed: %s' % instruction_means.get('followed'),
+        '- factual accuracy: %s' % report['probe']['mean_accuracy'],
+        '',
+        '### Sample out-of-distribution answers',
     ]
-    for result in report['instructions']['results'][:6]:
+    for result in report['instructions']['results'][:3]:
         lines.append(
             '- Q: %s\n  A: %r' % (result['instruction'], result['answer'])
         )
-    lines += [
-        '',
-        '## Factual accuracy probe (one to ten)',
-        '- mean accuracy: %s' % report['probe']['mean_accuracy'],
-    ]
-    for result in report['probe']['results'][:6]:
+    for result in report['probe']['results'][:3]:
         lines.append(
             '- Q: %s\n  A: %r (accuracy %s)'
             % (result['question'], result['answer'], result['accuracy'])
-        )
-    lines += [
-        '',
-        '## In-context binding (exact match, zero to one)',
-        '- exact match: %s' % report['binding']['exact_match'],
-    ]
-    for result in report['binding']['results'][:6]:
-        lines.append(
-            '- Q: %s\n  gold: %s\n  model: %r (%s)'
-            % (result['question'], result['answer'], result['output'],
-               'correct' if result['correct'] else 'wrong')
         )
     report_path = output_directory / ('report_%s.md' % stage)
     report_path.write_text('\n'.join(lines))
@@ -395,10 +525,11 @@ def run(config, stage='pretrain', checkpoint_dir=None):
     report = {
         'stage': stage,
         'judge_model': judge_model,
+        'grounded': grounded_instructions(config, student, engine, sampling),
+        'binding': binding_probe(config, student),
         'completions': score_completions(config, student, engine, sampling),
         'instructions': score_instructions(config, student, engine, sampling),
         'probe': accuracy_probe(config, student, engine, sampling),
-        'binding': binding_probe(config, student),
     }
     write_report(config, report)
     return report

@@ -57,6 +57,16 @@ pretrain:
   validation_fraction: 0.01
   early_stop_patience: 8
   instruction_fraction: 0.1
+  # Reserve multihop and notstated pairs for the finetune stage: the
+  # co-trained stream teaches the basic kinds, and finetuning adds the
+  # capabilities pretraining never saw, so the pretrain-to-sft delta
+  # measures capability gain rather than repeating the same distribution.
+  instruction_kinds:
+    - retrieval
+    - comparison
+    - transfer
+    - ratio
+    - order
 
 finetune:
   batch_size: 16
