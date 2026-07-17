@@ -172,30 +172,28 @@ independently via `run(config, stage, checkpoint_dir)`, writing
 variant, via `_sft_targets`) so the effect of each finetuning approach is
 directly visible. `_find_checkpoint` looks for `ckpt_best.pt` then
 `ckpt_last.pt`; a missing checkpoint causes that stage to be skipped, not to
-error. Each report has four parts, the first three spanning the same subject domains
-generation uses rather than a single topic (reworked alongside the referent
-relaxation and content broadening, node 41, after the seed lists were found
-still carrying bank and forest fragments from the old referent-free corpus):
-`score_completions` (fixed seeds judged for grammar and coherence, the
-`referent_free` axis dropped since it rewarded avoiding real content, which is
-now backward), `score_instructions` (`TASK_INSTRUCTIONS` spanning explain,
-how-to, compare, define, answer, advise, summarize, rewrite, list, and reason,
-judged for coherence and whether the answer follows and is correct), and
-`accuracy_probe` (a real-world factual-question probe, renamed and inverted
-from `knowledge_probe`: it now scores correctness directly rather than
-referent avoidance, and is promoted from demoted-and-unreliable to the most
-direct available signal of what finetuning adds over the base pretrained
-model, though a model this small is still expected to know very little of
-it). The fourth part is `binding_probe` (node 33, implemented): tasks from
-`slm.worldgen` state consistent facts about novel invented entities in a
-context paragraph and ask one back (ownership, storage, residence, or a
-two-way age/size comparison whose surface form may invert the stated
-direction); scoring is exact match of the gold name in the head of the
-completion, before the distractor for comparisons, with no judge involved.
-Nothing in a binding task is answerable from world knowledge, so it isolates
-the processor capability (node 32) and serves as the coherence gauge for the
-graph-experiment gate (node 45). `eval.number_of_binding_tasks` (default 32)
-sets the task count. `_extract_score` is a tolerant multi-pattern regex
+error. The evaluation is matched to the grounded corpus (realigned after the
+first grounded run, whose real-world question sets measured knowledge the
+corpus deliberately does not contain and thereby misread a large binding win
+as a regression). Each report has five parts, headline first:
+`grounded_instructions` supplies facts in the user turn from the same kind
+mix the pairs train on and scores exact match against program-derived
+answers, per kind (retrieval, comparison, multihop, notstated, transfer,
+ratio, order), with a judged coherence axis alongside so degraded English is
+visible even when the gold token appears; `binding_probe` (node 33) scores
+context-paragraph tasks by exact match, stratified over the four question
+categories with per-kind sub-scores -- the notstated sub-score is the
+fabrication gauge, measuring declining over inventing when the context does
+not contain the answer; `score_completions` judges grammar and coherence over
+seeds half cut from rendered world documents and half generic;
+`score_instructions` and `accuracy_probe` are the demoted out-of-distribution
+generalization section -- real-world instructions and facts, expected low,
+with the accuracy probe read as a contamination gauge (how much real-world
+fact leaked from the generator) rather than a target. Nothing in a grounded
+or binding task is answerable from world knowledge, so those isolate the
+processor capability (node 32), and binding remains the coherence gauge for
+the graph-experiment gate (node 45). `eval.number_of_binding_tasks` (default
+64) sets the task count. `_extract_score` is a tolerant multi-pattern regex
 extractor handling verbose judge replies, "X/10", and "X out of 10" forms.
 Judge model defaults to `eval.judge_model` or falls back to
 `generate.default_model`.
@@ -205,24 +203,40 @@ Judge model defaults to `eval.judge_model` or falls back to
 Implements the working half of the world-state mechanism (node 36):
 `sample_world` builds a small world of invented people, places, and objects
 whose facts are consistent by construction (residence, workplace, ownership,
-and storage are functions; ages and sizes are total rank orders, so every
-pairwise comparison has a unique answer); `_fragment` verbalizes a focus
-person's neighborhood through varied templates, including surface forms that
-invert the stated relation ("X is younger than Y" for an older-fact);
-`binding_tasks(seed, count)` emits evaluation tasks with program-known
-answers and distractors. `sample_grounding(rng, kind)` is the generation
-feed: it returns a fragment or one of three puzzle kinds, each with facts, a
-question, the program-derived answer, and a derivation -- **transfer**
-(countable-goods arithmetic, answers verified against independent
-recomputation over 500 samples), **ratio** (three invented units with exact
-integer conversion factors), **order** (a four-name comparison chain with
-direction-inverting surfaces). All prompt builders in `prompts.py` consume
-these groundings (node 46), realizing the construction-solving asymmetry
-(node 37): the program runs the cheap forward direction and hands the writer
-the hard-direction question already answered. Deterministic given the seed;
+and storage are functions; ages carry both a total rank order and consistent
+absolute years, sizes a rank order, so every comparison has a unique answer).
+Worlds draw their vocabulary from one of eight domain lexicons (`DOMAINS`:
+workshop, harbor, farm, market, study, infirmary, inn, road), each with its
+own places, objects, and countable goods, added after the first grounded run
+showed the corpus collapsing into a single artisan register. `_fragment`
+verbalizes a focus person's neighborhood through varied templates, including
+surface forms that invert the stated relation, and states ages either
+relatively or as absolute years (so the comparison must sometimes be derived
+from numbers). Fragment questions span four categories (`_make_question`):
+**retrieval** (residence, workplace, ownership, storage, stated age),
+**comparison**, **multihop** (compose two stated facts: an object's owner
+plus that owner's residence or workplace), and **notstated** (the gold answer
+is `NOT_STATED_ANSWER`; the asked fact is verifiably absent from the
+fragment, teaching declining over fabricating -- the failure mode the first
+grounded model showed on every context-free question).
+`binding_tasks(seed, count)` emits evaluation tasks stratified over the
+categories, each tagged with its kind. `sample_grounding(rng, kind,
+category)` is the generation feed: a fragment or one of three puzzle kinds,
+each with facts, a question, the program-derived answer, and a derivation --
+**transfer** (countable-goods arithmetic over domain goods), **ratio** (three
+invented units with exact integer conversion factors), **order** (a four-name
+comparison chain with direction-inverting surfaces, asking either the
+superlative or a transitive pairwise question whose two names are never
+adjacent in the chain, so no single stated fact answers it).
+`sample_pair_grounding` draws the instruction-pair mix (`PAIR_KIND_MIX`,
+including a notstated share). All kinds are verified by independent
+recomputation over 500 samples each -- parsing the rendered fact strings and
+re-deriving the answer, or checking structural absence for notstated. All
+prompt builders in `prompts.py` consume these groundings (node 46), realizing
+the construction-solving asymmetry (node 37). Deterministic given the seed;
 `python -m slm.worldgen --seed 7` previews tasks. Remaining increments:
-round-trip verification of rendered text (node 38), a persistent world shared
-across many documents, and multi-hop questions.
+round-trip verification of rendered text (node 38) and a persistent world
+shared across many documents.
 
 ### report (`src/slm/report.py`) -- one-document run summary
 
@@ -415,52 +429,76 @@ never-saw-this-distribution. The grounded corpus removes that confound, so the
 grounded ladder gives the first fair reading. Net: the bottleneck has moved
 from model capacity to data coherence.
 
-## Milestones for the next phase
+## M1 result: grounding opened the gate; the ceiling is the task family (node 51)
 
-**M1 — grounded ladder as the data-coherence test (node 48).** Submit
-`configs/scale/world.yaml`; run-id isolation (see the submitter section) keeps
-it off the existing runs. It generates the grounded corpus (node 46) across
-the pico-to-full ladder, and because the full rung is already the `mini`
-preset it is a clean same-size comparison against the mini-on-ungrounded
-result above. Opening gate: in-context binding exact-match clearly above the
-guessing floor, a target near 0.25 on the full rung across both stages,
-sustained across rungs, with comparison and retrieval sub-scores read apart
-(retrieval clearing zero is the stronger signal). Secondary: grammar and
-coherence at least matching the mini-on-ungrounded baseline, and the followed
-score rising, since grounded pairs state the facts in the user turn. The
-pico-to-full rungs give a binding-versus-data-fraction curve for free.
+The grounded ladder ran (world-359bf5fe). Binding across the rungs, with
+grammar/coherence at pretrain:
 
-**M2 — scale on grounded data, axis chosen empirically (node 49).** Do not
-pre-commit to more-data versus bigger-model; read the lever off the M1 curve.
-Binding rising with data fraction across rungs means the corpus is the
-constraint (generate more grounded data); binding above floor but flat means
-capacity is the constraint (step the preset up to a roughly forty-million
-small model, reusing the grounded corpus at two to four effective epochs as
-the mini rung did, since tokens per non-embedding parameter is about fifteen).
-Gate: binding at least 0.5 and coherence at least 7.
+| rung | non-emb params | tokens | binding (pre/sft) | grammar | coherence |
+|---|---|---|---|---|---|
+| pico | 0.43M | 19M | 0.28 / 0.25 | 2.7 | 2.2 |
+| nano | 1.77M | 46M | 0.56 / 0.56 | 4.8 | 4.0 |
+| micro | 5.98M | 90M | 0.78 / 0.81 | 6.2 | 6.0 |
+| full (mini) | 14.16M | 180M | 0.75 / 0.78 | 6.8 | 7.0 |
 
-**M3 — graph input/output experiments (node 50), gated on M1's binding gate
-(node 45).** Graph-versus-flat comparisons are uninterpretable while the flat
-model cannot bind referents from plain context, so this waits for M1 to open
-the gate and M2 to widen the margin. The graph stages already exist; the study
-holds parameters and token budget fixed and varies only the context
-representation over shared worlds, scoring binding (node 33) and coherence.
+Readings, in order of importance:
 
-The ordering logic: data before scale, because this run showed scale alone
-leaves binding at zero; graph last, because it needs a non-zero baseline to
-measure against.
+- **The M1 gate opened decisively.** At identical model size, grounded data
+  took binding from 0.03 (chance) to 0.78, thirty times past the 0.25 gate,
+  with fluency held (coherence 7.0). The binding failure was a property of
+  the data, not the scale. Even 0.43M-parameter pico reaches 0.28.
+- **Binding plateaus from micro up.** The micro-to-full step spent 2.4x
+  parameters and 2x data for zero binding gain (0.78/0.81 to 0.75/0.78)
+  while fluency kept rising. The ~0.8 ceiling is task-distribution-limited,
+  not scale-limited, which resolves M2's question differently than either
+  pre-committed axis: the lever is richer generation, not more of the same.
+- **SFT is flat because co-training saturates it.** Pair perplexity at
+  pretrain is already ~1.5 by micro; finetune early-stops within a few
+  hundred steps with nothing left to teach. The consolidated recipe is
+  non-destructive but redundant while SFT data repeats the co-trained mix.
+- **Evaluation mismatch misread the result as regression.** The real-world
+  instruction/accuracy sets measure knowledge the grounded corpus
+  deliberately lacks; asked such questions, the model fabricates fact-worlds
+  in perfect trained form (no pair ever showed facts being absent).
+  Interactive probing confirmed: form-perfect confabulation with no
+  epistemic boundary, self-generated names drifting mid-derivation, and
+  zero coverage of degenerate logic.
+- **The corpus narrowed to one register.** Every sample lives in the same
+  artisan world; the model cannot leave it even from out-of-world seeds.
+  Diversity contraction (node 35) returned through worldgen's single
+  vocabulary rather than through the LLM.
+
+## Response implemented: broaden generation, differentiate SFT, match the eval
+
+Implemented in this order because generation and evaluation must match, and
+generation leads (node 52):
+
+1. **Broadened worldgen**: eight domain lexicons; absolute ages beside ranks;
+   four fragment question categories including multihop (compose two stated
+   facts) and notstated (gold answer: the facts do not say -- teaching the
+   epistemic boundary the confabulation transcript showed missing);
+   transitive pairwise order questions. All verified by independent
+   recomputation over 500 samples per kind.
+2. **SFT differentiation**: pairs carry their task kind;
+   `pretrain.instruction_kinds` restricts the co-trained stream (world.yaml
+   reserves multihop and notstated for finetuning), so the pretrain-to-sft
+   delta becomes a capability measurement instead of a repeat.
+3. **Matched evaluation**: grounded instructions as exact-match headline with
+   per-kind sub-scores, stratified binding with a notstated fabrication
+   gauge, half-grounded completion seeds, and the real-world sets demoted to
+   a labeled out-of-distribution section with accuracy read as contamination.
+
+**M2 (node 49, updated)**: rerun the ladder on the broadened corpus first;
+the new sub-scores (multihop, notstated) say what scale is actually needed
+for. **M3 (node 50)**: unchanged, gated on binding, which now stands at 0.78.
 
 ## Smaller follow-ups
 
-- **Extend worldgen.** Round-trip verification of rendered text against the
-  grounding, discarding mismatches (node 38, the missing safeguard now that
-  all text flows through the renderer); multi-hop binding questions; a
-  persistent world shared across many documents (node 36).
+- **Extend worldgen further.** Round-trip verification of rendered text
+  against the grounding, discarding mismatches (node 38, the missing
+  safeguard now that all text flows through the renderer); a persistent
+  world shared across many documents (node 36); multi-turn pairs (the chat
+  probe showed single-turn training gives cross-turn behavior no chance).
 - **Cosmetic cleanup**: remove the vestigial `<|user|>`/`<|assistant|>` tokens
   from `TokenizerConfig.special_tokens`; they are remnants of the abandoned
   role-token design and nothing reads them.
-
-M1 is ready to run. M2's axis is decided by M1's data, and M3 and the worldgen
-extensions are design-bearing and should have their scope confirmed before
-implementation, consistent with the project's rule that code is written only
-when explicitly asked for.

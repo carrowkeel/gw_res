@@ -209,14 +209,14 @@ def _answer_clause(grounding):
 def _prose_prompt(random_generator):
     grounding = worldgen.sample_grounding(random_generator, 'fragment')
     return (
-        'Write %s in a %s tone: %s, drawn from %s, told from %s. The story '
+        'Write %s in a %s tone: %s, set among %s, told from %s. The story '
         'must have a plot: a character who wants something, an obstacle or '
         'opposition, a turning point, and a definite outcome. Use the people '
         'and places named in the facts as the characters and setting.%s' % (
             random_generator.choice(seeds.LENGTH_BANDS),
             random_generator.choice(seeds.TONES),
             random_generator.choice(seeds.STORY_SITUATIONS),
-            random_generator.choice(seeds.SUBJECT_DOMAINS),
+            grounding['domain_label'],
             random_generator.choice(seeds.POINTS_OF_VIEW),
             _facts_clause(grounding),
         )
@@ -318,15 +318,32 @@ _PAIR_FORMAT = (
 )
 
 def build_pair_prompt(random_generator):
-    """Return a prompt that yields one grounded instruction and response pair.
+    """Return (prompt, task kind) for one grounded instruction-response pair.
 
     The user turn must contain the grounding facts and the question, so the
     pair is answerable from its own context, and the assistant's answer is
     fixed by the program-derived ground truth, so the pair cannot teach a
     wrong conclusion. Half the pairs ask for the bare answer with brief
     working; half ask the assistant to explain the solution step by step.
+    The kinds range over the full task mix, including multihop composition
+    and notstated pairs whose correct response is to say the facts do not
+    contain the answer, so the model learns the boundary of its context
+    instead of fabricating an answer in perfect form.
     """
-    grounding = worldgen.sample_grounding(random_generator)
+    grounding = worldgen.sample_pair_grounding(random_generator)
+    kind = grounding['task_kind']
+    if kind == 'notstated':
+        return (
+            'Create one instruction and response pair for a helpful '
+            'assistant. The user message must state all of these facts in '
+            'its own words and then ask: "%s" The facts: %s The facts do '
+            'not contain the answer to that question, and the response must '
+            'say exactly that, in one short sentence such as "%s", without '
+            'inventing an answer.%s' % (
+                grounding['question'], ' '.join(grounding['facts']),
+                grounding['answer'], _PAIR_FORMAT,
+            )
+        ), kind
     if random_generator.random() < 0.5:
         style = (
             'The assistant answers directly, with at most one sentence of '
@@ -348,7 +365,7 @@ def build_pair_prompt(random_generator):
              if grounding['derivation'] else ''),
             _PAIR_FORMAT,
         )
-    )
+    ), kind
 
 
 def split_pair(text):

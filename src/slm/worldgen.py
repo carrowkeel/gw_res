@@ -23,32 +23,147 @@ import random
 
 from . import seeds
 
-PLACE_KINDS = [
-    'mill', 'forge', 'market hall', 'granary', 'boathouse', 'weaving shed',
-    'brewhouse', 'stable', 'printworks', 'bakery',
-]
-
-OBJECT_KINDS = [
-    'kettle', 'chest', 'ladder', 'anvil', 'loom', 'cart', 'barrel',
-    'lantern', 'plough', 'bench', 'clock', 'press',
-]
-
 MATERIALS = [
     'copper', 'oak', 'iron', 'ash', 'tin', 'birch', 'leather', 'stone',
     'brass', 'elm', 'pine', 'steel',
 ]
 
-COUNTABLE_GOODS = [
-    'sacks of grain', 'coils of rope', 'clay jars', 'bolts of cloth',
-    'crates of apples', 'bundles of firewood', 'barrels of cider',
-    'boxes of nails', 'baskets of eggs', 'sheets of tin',
-]
+# Each domain supplies its own places, objects, and countable goods so the
+# sampled worlds range over many registers rather than one workshop scene.
+# Names stay generic (no real-world proper referents); variety comes from the
+# vocabulary itself.
+DOMAINS = {
+    'workshop': {
+        'label': 'workshops and trades',
+        'places': [
+            'mill', 'forge', 'market hall', 'granary', 'boathouse',
+            'weaving shed', 'brewhouse', 'stable', 'printworks', 'bakery',
+        ],
+        'objects': [
+            'kettle', 'chest', 'ladder', 'anvil', 'loom', 'cart', 'barrel',
+            'lantern', 'plough', 'bench', 'clock', 'press',
+        ],
+        'goods': [
+            'sacks of grain', 'coils of rope', 'clay jars', 'bolts of cloth',
+            'bundles of firewood', 'boxes of nails', 'sheets of tin',
+        ],
+    },
+    'harbor': {
+        'label': 'harbors and the sea',
+        'places': [
+            'quay', 'lighthouse', 'ferry landing', 'chandlery', 'fish market',
+            'harbor office', 'shipyard', 'salt store', 'net loft',
+        ],
+        'objects': [
+            'skiff', 'net', 'anchor', 'oar', 'buoy', 'mast', 'compass',
+            'harpoon', 'tide bell', 'sea chest',
+        ],
+        'goods': [
+            'barrels of salt fish', 'coils of anchor line', 'crates of oysters',
+            'casks of lamp oil', 'bundles of sailcloth', 'baskets of crabs',
+        ],
+    },
+    'farm': {
+        'label': 'farms and orchards',
+        'places': [
+            'orchard', 'dairy', 'seed store', 'threshing barn', 'cider house',
+            'sheepfold', 'well house', 'beeyard', 'hay loft',
+        ],
+        'objects': [
+            'scythe', 'churn', 'beehive', 'rake', 'trough', 'sieve',
+            'harrow', 'milk pail', 'grain bin', 'apple press',
+        ],
+        'goods': [
+            'crates of apples', 'pails of milk', 'sacks of seed',
+            'jars of honey', 'bushels of barley', 'baskets of eggs',
+        ],
+    },
+    'market': {
+        'label': 'markets and trade',
+        'places': [
+            'counting house', 'cloth hall', 'auction yard', 'warehouse',
+            'coin exchange', 'tea house', 'spice hall', 'toll booth',
+        ],
+        'objects': [
+            'scale', 'ledger', 'strongbox', 'abacus', 'seal', 'banner',
+            'till', 'measuring rod', 'coin tray', 'sample case',
+        ],
+        'goods': [
+            'rolls of silk', 'chests of tea', 'bags of pepper',
+            'bars of soap', 'reams of paper', 'boxes of candles',
+        ],
+    },
+    'study': {
+        'label': 'study and record-keeping',
+        'places': [
+            'lecture hall', 'scriptorium', 'archive', 'observatory',
+            'map room', 'bindery', 'instrument room', 'reading room',
+        ],
+        'objects': [
+            'globe', 'atlas', 'inkstand', 'telescope', 'slate', 'hourglass',
+            'star chart', 'letter press', 'specimen cabinet', 'music stand',
+        ],
+        'goods': [
+            'reams of paper', 'pots of ink', 'bundles of quills',
+            'rolls of parchment', 'boxes of chalk', 'folders of maps',
+        ],
+    },
+    'infirmary': {
+        'label': 'healing and remedies',
+        'places': [
+            'infirmary', 'apothecary', 'herb garden', 'spring house',
+            'surgery', 'still room', 'convalescent ward', 'bath house',
+        ],
+        'objects': [
+            'mortar', 'flask', 'cot', 'salve pot', 'herb press',
+            'tonic cabinet', 'bandage roll', 'scale', 'ointment jar',
+        ],
+        'goods': [
+            'bottles of tonic', 'bundles of herbs', 'rolls of bandage',
+            'jars of salve', 'boxes of lozenges', 'flasks of spirits',
+        ],
+    },
+    'inn': {
+        'label': 'inns and households',
+        'places': [
+            'inn', 'coach house', 'kitchen garden', 'laundry', 'cellar',
+            'common room', 'pantry', 'wash house', 'wood store',
+        ],
+        'objects': [
+            'cauldron', 'wardrobe', 'mirror', 'roasting spit', 'wash tub',
+            'linen chest', 'candle stand', 'ale cask', 'bread oven',
+        ],
+        'goods': [
+            'loaves of bread', 'casks of ale', 'jars of preserves',
+            'bundles of linen', 'baskets of turnips', 'wheels of cheese',
+        ],
+    },
+    'road': {
+        'label': 'roads and travel',
+        'places': [
+            'waystation', 'toll gate', 'bridge house', 'coach yard',
+            'signal tower', 'ferry crossing', 'post office', 'stable yard',
+        ],
+        'objects': [
+            'wagon', 'saddle', 'signpost', 'trunk', 'map case', 'lantern',
+            'harness', 'post bag', 'wheel jack', 'road log',
+        ],
+        'goods': [
+            'bales of hay', 'parcels of post', 'sacks of oats',
+            'bundles of maps', 'crates of lanterns', 'kegs of tar',
+        ],
+    },
+}
 
 ORDER_DIMENSIONS = [
     ('older', 'younger', 'the oldest'),
     ('taller', 'shorter', 'the tallest'),
     ('heavier', 'lighter', 'the heaviest'),
+    ('faster', 'slower', 'the fastest'),
+    ('stronger', 'weaker', 'the strongest'),
 ]
+
+NOT_STATED_ANSWER = 'That is not stated.'
 
 _TEMPLATES = {
     'lives': [
@@ -79,6 +194,11 @@ _TEMPLATES = {
         'The %(first)s is larger than the %(second)s.',
         'The %(second)s is smaller than the %(first)s.',
     ],
+    'age': [
+        '%(person)s is %(years)d years old.',
+        'At %(years)d years old, %(person)s is well known there.',
+        '%(person)s has seen %(years)d years.',
+    ],
 }
 
 
@@ -87,14 +207,18 @@ def _sample_unique(random_generator, pool_a, pool_b, count):
     return random_generator.sample(pairs, count)
 
 
-def sample_world(random_generator, people=3, places=3, objects=4):
+def sample_world(random_generator, people=3, places=3, objects=4, domain=None):
     """Return a consistent small world of people, places, and objects.
 
-    People carry distinct age ranks and objects distinct size ranks, so every
-    pairwise comparison has a unique, consistent answer. Residence, workplace,
-    ownership, and storage are functions, so every retrieval question has a
-    unique answer.
+    People carry distinct age ranks with consistent absolute ages in years, and
+    objects distinct size ranks, so every pairwise comparison has a unique,
+    consistent answer. Residence, workplace, ownership, and storage are
+    functions, so every retrieval question has a unique answer. The vocabulary
+    is drawn from one sampled domain so worlds range across many registers.
     """
+    if domain is None:
+        domain = random_generator.choice(sorted(DOMAINS))
+    vocabulary = DOMAINS[domain]
     person_names = []
     while len(person_names) < people:
         name = seeds.invented_name(random_generator)
@@ -102,19 +226,23 @@ def sample_world(random_generator, people=3, places=3, objects=4):
             person_names.append(name)
     place_list = [
         '%s %s' % (seeds.invented_name(random_generator), kind)
-        for kind in random_generator.sample(PLACE_KINDS, places)
+        for kind in random_generator.sample(vocabulary['places'], places)
     ]
     object_list = [
         '%s %s' % (material, kind)
         for material, kind in _sample_unique(
-            random_generator, MATERIALS, OBJECT_KINDS, objects
+            random_generator, MATERIALS, vocabulary['objects'], objects
         )
     ]
     age_order = list(person_names)
     random_generator.shuffle(age_order)
+    # age_rank is ordered youngest-first (see _fragment's elder test), so the
+    # i-th ranked person gets the i-th smallest age and years agree with ranks.
+    ages = sorted(random_generator.sample(range(18, 75), people))
     size_order = list(object_list)
     random_generator.shuffle(size_order)
     world = {
+        'domain': domain,
         'people': person_names,
         'places': place_list,
         'objects': object_list,
@@ -123,6 +251,7 @@ def sample_world(random_generator, people=3, places=3, objects=4):
         'owner': {},
         'kept': {o: random_generator.choice(place_list) for o in object_list},
         'age_rank': {p: i for i, p in enumerate(age_order)},
+        'age_years': {p: ages[i] for i, p in enumerate(age_order)},
         'size_rank': {o: i for i, o in enumerate(size_order)},
     }
     for index, item in enumerate(object_list):
@@ -165,10 +294,20 @@ def _fragment(world, random_generator):
         age_pair = (other, person)
     else:
         age_pair = (person, other)
-    sentences.append(
-        _render('older', random_generator, first=age_pair[0],
-                second=age_pair[1])
-    )
+    # Half the fragments state the comparison directly; half state each
+    # person's age in years, so the comparison must be derived from numbers.
+    ages_stated = random_generator.random() < 0.5
+    if ages_stated:
+        for who in (person, other):
+            sentences.append(
+                _render('age', random_generator, person=who,
+                        years=world['age_years'][who])
+            )
+    else:
+        sentences.append(
+            _render('older', random_generator, first=age_pair[0],
+                    second=age_pair[1])
+        )
     size_pair = sorted(
         fragment_objects[:2], key=lambda o: world['size_rank'][o], reverse=True
     )
@@ -183,60 +322,139 @@ def _fragment(world, random_generator):
         'other': other,
         'objects': fragment_objects,
         'age_pair': age_pair,
+        'ages_stated': ages_stated,
         'size_pair': size_pair if len(size_pair) == 2 else None,
     }
     return sentences, facts
 
 
-def _make_question(world, facts, random_generator):
-    """Return (question, answer, distractor or None) answerable from the fragment."""
+QUESTION_CATEGORIES = ['retrieval', 'comparison', 'multihop', 'notstated']
+
+
+def _multihop_items(world, facts):
+    """Objects whose owner is the focus person, so a two-fact chain is stated."""
+    return [
+        item for item in facts['objects']
+        if world['owner'][item] == facts['person']
+    ]
+
+
+def _make_question(world, facts, random_generator, category=None):
+    """Return (question, answer, distractor or None, category).
+
+    Every question is answerable from the fragment alone, except category
+    notstated, whose gold answer is that the fragment does not say. retrieval
+    reads one stated fact back; comparison resolves a stated or number-derived
+    comparison; multihop composes two stated facts (an object's owner plus
+    that owner's stated residence or workplace).
+    """
     person = facts['person']
-    choices = ['where_lives', 'who_owns', 'where_kept', 'older']
-    if facts['size_pair']:
-        choices.append('larger')
-    kind = random_generator.choice(choices)
-    if kind == 'where_lives':
-        return 'Where does %s live?' % person, world['lives'][person], None
-    if kind == 'who_owns':
-        item = random_generator.choice(facts['objects'])
-        return 'Who owns the %s?' % item, world['owner'][item], None
-    if kind == 'where_kept':
-        item = random_generator.choice(facts['objects'])
-        return 'Where is the %s kept?' % item, world['kept'][item], None
-    if kind == 'older':
+    hop_items = _multihop_items(world, facts)
+    if category is None:
+        available = ['retrieval', 'comparison']
+        if hop_items:
+            available.append('multihop')
+        category = random_generator.choice(available)
+
+    if category == 'retrieval':
+        choices = ['where_lives', 'where_works', 'who_owns', 'where_kept']
+        if facts['ages_stated']:
+            choices.append('how_old')
+        kind = random_generator.choice(choices)
+        if kind == 'where_lives':
+            return ('Where does %s live?' % person,
+                    world['lives'][person], None, category)
+        if kind == 'where_works':
+            return ('Where does %s work?' % person,
+                    world['works'][person], None, category)
+        if kind == 'who_owns':
+            item = random_generator.choice(facts['objects'])
+            return ('Who owns the %s?' % item,
+                    world['owner'][item], None, category)
+        if kind == 'where_kept':
+            item = random_generator.choice(facts['objects'])
+            return ('Where is the %s kept?' % item,
+                    world['kept'][item], None, category)
+        return ('How old is %s?' % person,
+                str(world['age_years'][person]), None, category)
+
+    if category == 'comparison':
+        if facts['size_pair'] and random_generator.random() < 0.5:
+            larger, smaller = facts['size_pair']
+            pair = [larger, smaller]
+            random_generator.shuffle(pair)
+            question = 'Which is larger, the %s or the %s?' % (
+                pair[0], pair[1]
+            )
+            return question, larger, smaller, category
         elder, junior = facts['age_pair']
         pair = [elder, junior]
         random_generator.shuffle(pair)
         question = 'Who is older, %s or %s?' % (pair[0], pair[1])
-        return question, elder, junior
-    larger, smaller = facts['size_pair']
-    pair = [larger, smaller]
-    random_generator.shuffle(pair)
-    question = 'Which is larger, the %s or the %s?' % (pair[0], pair[1])
-    return question, larger, smaller
+        return question, elder, junior, category
+
+    if category == 'multihop':
+        item = random_generator.choice(hop_items)
+        if random_generator.random() < 0.5:
+            return ('Where does the owner of the %s live?' % item,
+                    world['lives'][person], None, category)
+        return ('Where does the owner of the %s work?' % item,
+                world['works'][person], None, category)
+
+    # notstated: ask for a fact the fragment genuinely does not state, about
+    # an entity it mentions (or an object it never mentions at all).
+    choices = ['other_lives', 'unmentioned_object']
+    if not facts['ages_stated']:
+        choices.append('how_old')
+    kind = random_generator.choice(choices)
+    if kind == 'other_lives':
+        question = 'Where does %s live?' % facts['other']
+    elif kind == 'unmentioned_object':
+        outside = [
+            item for item in world['objects']
+            if item not in facts['objects']
+        ]
+        if not outside:
+            question = 'Where does %s live?' % facts['other']
+        else:
+            item = random_generator.choice(outside)
+            question = 'Where is the %s kept?' % item
+    else:
+        question = 'How old is %s?' % person
+    return question, NOT_STATED_ANSWER, None, category
 
 
-def binding_tasks(seed, count):
+def binding_tasks(seed, count, categories=None):
     """Return in-context binding tasks with exact answers known by construction.
 
     Each task is a dict with context (a paragraph of consistent facts about
-    novel invented entities), question, answer, and an optional distractor
-    (the wrong candidate in a two-way comparison). A model that binds the
-    context correctly can answer; nothing is answerable from world knowledge.
+    novel invented entities), question, answer, kind (the question category),
+    and an optional distractor (the wrong candidate in a two-way comparison).
+    Tasks cycle through the categories so each sub-score gets an even share:
+    retrieval and comparison read the context back, multihop composes two
+    stated facts, and notstated asks for a fact the context does not contain,
+    so it measures whether the model fabricates or declines.
     """
     random_generator = random.Random(seed)
+    categories = categories or QUESTION_CATEGORIES
     tasks = []
-    for _ in range(count):
-        world = sample_world(random_generator)
-        sentences, facts = _fragment(world, random_generator)
-        question, answer, distractor = _make_question(
-            world, facts, random_generator
+    for index in range(count):
+        category = categories[index % len(categories)]
+        while True:
+            world = sample_world(random_generator)
+            sentences, facts = _fragment(world, random_generator)
+            if category == 'multihop' and not _multihop_items(world, facts):
+                continue
+            break
+        question, answer, distractor, kind = _make_question(
+            world, facts, random_generator, category
         )
         tasks.append({
             'context': ' '.join(sentences),
             'question': question,
             'answer': answer,
             'distractor': distractor,
+            'kind': kind,
         })
     return tasks
 
@@ -265,7 +483,8 @@ def _transfer_puzzle(random_generator):
     receiver = seeds.invented_name(random_generator)
     while receiver == giver:
         receiver = seeds.invented_name(random_generator)
-    goods = random_generator.choice(COUNTABLE_GOODS)
+    domain = random_generator.choice(sorted(DOMAINS))
+    goods = random_generator.choice(DOMAINS[domain]['goods'])
     start_giver = random_generator.randint(8, 30)
     start_receiver = random_generator.randint(2, 15)
     given = random_generator.randint(2, start_giver - 2)
@@ -294,6 +513,7 @@ def _transfer_puzzle(random_generator):
     return {
         'kind': 'transfer', 'facts': facts, 'question': question,
         'answer': str(answer), 'derivation': derivation,
+        'task_kind': 'transfer',
     }
 
 
@@ -327,6 +547,7 @@ def _ratio_puzzle(random_generator):
     return {
         'kind': 'ratio', 'facts': facts, 'question': question,
         'answer': str(answer), 'derivation': derivation,
+        'task_kind': 'ratio',
         'units': [small, middle, large],
         'ratios': [first_ratio, second_ratio],
     }
@@ -350,21 +571,42 @@ def _order_puzzle(random_generator):
         else:
             facts.append('%s is %s than %s.' % (lower, inverse, upper))
     random_generator.shuffle(facts)
-    question = 'Who is %s?' % superlative
-    derivation = [' > '.join(order)]
+    if random_generator.random() < 0.5:
+        question = 'Who is %s?' % superlative
+        answer, distractor = order[0], None
+        derivation = [' > '.join(order)]
+    else:
+        # A transitive pairwise question: the two names are never adjacent in
+        # the chain, so no single stated fact answers it and at least one
+        # intermediate step must be composed.
+        first = random_generator.randrange(0, len(order) - 2)
+        second = random_generator.randrange(first + 2, len(order))
+        pair = [order[first], order[second]]
+        random_generator.shuffle(pair)
+        question = 'Who is %s, %s or %s?' % (comparative, pair[0], pair[1])
+        answer, distractor = order[first], order[second]
+        derivation = [' > '.join(order[first:second + 1])]
     return {
         'kind': 'order', 'facts': facts, 'question': question,
-        'answer': order[0], 'derivation': derivation,
+        'answer': answer, 'derivation': derivation,
+        'task_kind': 'order', 'distractor': distractor,
     }
 
 
-def _fragment_grounding(random_generator):
+def _fragment_grounding(random_generator, category=None):
     world = sample_world(random_generator, people=4, places=4, objects=6)
     sentences, facts = _fragment(world, random_generator)
-    question, answer, _ = _make_question(world, facts, random_generator)
+    if category == 'multihop' and not _multihop_items(world, facts):
+        category = 'retrieval'
+    question, answer, distractor, question_category = _make_question(
+        world, facts, random_generator, category
+    )
     return {
         'kind': 'fragment', 'facts': sentences, 'question': question,
-        'answer': answer, 'derivation': None,
+        'answer': answer, 'derivation': None, 'distractor': distractor,
+        'task_kind': question_category,
+        'domain': world['domain'],
+        'domain_label': DOMAINS[world['domain']]['label'],
     }
 
 
@@ -375,7 +617,7 @@ _PUZZLE_KINDS = {
 }
 
 
-def sample_grounding(random_generator, kind=None):
+def sample_grounding(random_generator, kind=None, category=None):
     """Return one program-generated grounding for the LLM writer.
 
     A grounding is a set of facts that are consistent by construction, plus a
@@ -384,25 +626,56 @@ def sample_grounding(random_generator, kind=None):
     where it works a problem, reaches the correct answer without having to
     solve anything itself. Kinds: fragment (a small relational world),
     transfer (countable goods arithmetic), ratio (invented units with exact
-    conversion factors), order (a comparison chain with inverted surfaces).
+    conversion factors), order (a comparison chain with inverted surfaces and
+    transitive questions). For fragments, category picks the question class
+    (retrieval, comparison, multihop, notstated); left unset, the question
+    ranges over the answerable classes only.
     """
     if kind is None:
         kind = random_generator.choice(
             ['fragment', 'fragment', 'transfer', 'ratio', 'order']
         )
     if kind == 'fragment':
-        return _fragment_grounding(random_generator)
+        return _fragment_grounding(random_generator, category)
     return _PUZZLE_KINDS[kind](random_generator)
+
+
+# Mix for instruction pairs: answerable fragment classes and puzzles carry
+# most of the weight, multihop trains two-fact composition, and a notstated
+# share teaches the model to decline when the facts do not contain the answer
+# instead of fabricating one in perfect form.
+PAIR_KIND_MIX = (
+    [('fragment', 'retrieval')] * 3
+    + [('fragment', 'comparison')] * 2
+    + [('fragment', 'multihop')] * 2
+    + [('fragment', 'notstated')] * 1
+    + [('transfer', None)] * 2
+    + [('ratio', None)] * 2
+    + [('order', None)] * 2
+)
+
+
+def sample_pair_grounding(random_generator):
+    """Return one grounding for an instruction pair, over the full task mix."""
+    kind, category = random_generator.choice(PAIR_KIND_MIX)
+    return sample_grounding(random_generator, kind, category)
+
+
+_DECLINE_MARKERS = ['not stated', 'not given', 'does not say', 'not mentioned']
 
 
 def score_binding_answer(task, output):
     """Return 1.0 if the model output names the gold answer, else 0.0.
 
     The gold answer must appear in the head of the output; in a two-way
-    comparison the wrong candidate must not appear before it.
+    comparison the wrong candidate must not appear before it. For a notstated
+    task the gold behavior is declining: any recognized decline phrasing
+    scores, and a specific fabricated answer does not.
     """
     head = ' '.join(output.strip().lower().split())[:120]
     gold = task['answer'].lower()
+    if task['answer'] == NOT_STATED_ANSWER:
+        return 1.0 if any(marker in head for marker in _DECLINE_MARKERS) else 0.0
     gold_position = head.find(gold)
     if gold_position == -1:
         return 0.0
