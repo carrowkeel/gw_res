@@ -31,6 +31,7 @@ src/slm/
   pipeline.py       local orchestrator
   sample.py         diagnostic: raw base-model completions
   inspect.py        diagnostic: corpus yield, diversity, contamination
+  sim/              SGM redirection: schema.py and doctrine.yaml drafts
 slurm/
   submit.py             dependency-chained sbatch submitter
   example_stage.sbatch
@@ -539,3 +540,49 @@ against the previous ladder.
 - **Cosmetic cleanup**: remove the vestigial `<|user|>`/`<|assistant|>` tokens
   from `TokenizerConfig.special_tokens`; they are remnants of the abandoned
   role-token design and nothing reads them.
+
+## Redirection: the SGM, a simulator-grounded controller (nodes 53-56)
+
+The project target changed after the second ladder. Both corpus extremes
+failed in opposite directions — free LLM writing gave fluency with binding
+at chance, and the fully grounded corpus gave binding at 0.73-0.81 while
+collapsing general language to schema (the model answered "Hello" with a
+fabricated fact) — and the user redirected the goal away from prose-writing
+models entirely. The new target (node 53) is a NASA-like mission controller
+whose communication, reasoning, delegation, and risk understanding come
+from its corpus, not from alignment layers: operational register by
+default, graceful degradation to plain conversation, and structured
+outputs a program can parse.
+
+The design is recorded in full in `docs/sgm_mvp.md` (the MVP specification
+and the six-phase implementation plan) and crystallized in intent nodes
+53-56. In brief: a mission-day simulator (SIM) is the sole source of ground
+truth, running forward cheaply and adjudicating any state on demand through
+Architect-authored executable doctrine; the trained model (SGM, Small Graph
+Model) is a Graph-to-Graph function realized in v0 as the existing decoder
+over a canonical, invertible serialization of episode graphs; the LLM
+(Qwen) supplies language surfaces through offline compositional banks and
+never facts or logic; input surfaces vary while output commands are
+canonical and schema-parsed (read many, write canonical). The corpus has
+three tiers: a fresh unconstrained conversational substrate (T1, never
+below a 10-15 percent floor), freshly sampled simulation traffic (T2, a
+variable-length stage with metric stopping criteria), and real operational
+data (T3) held out as never-trained transfer probes.
+
+All prior corpora and runs are retained on disk as baselines only. The
+scale-ladder submitter, run isolation, packing and replay, reserved-kind
+SFT, and the report machinery all carry forward unchanged; the novelty
+budget is spent on the SIM, the schema, the doctrine, the language layer,
+and the evaluation.
+
+Current state of the redirection: Phase 0 (this bookkeeping) is done, and
+Phase 1 has two review drafts in the tree — `src/slm/sim/schema.py` (typed
+episode-graph nodes and edges, the canonical command vocabulary, and
+validation) and `src/slm/sim/doctrine.yaml` (the Architect-authored
+decision doctrine draft: thresholds, prioritized rules over system metrics,
+and rationale codes). The doctrine file format is interpreted, not
+hardcoded: each rule names a metric path, a comparison against a literal or
+a named threshold, a canonical command with argument bindings, and a
+rationale code, with priority resolving conflicts deterministically.
+`dynamics.py`, `episode.py`, and the doctrine interpreter follow once the
+schema and doctrine drafts are reviewed.
