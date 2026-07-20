@@ -42,6 +42,13 @@ is unconstrained and diverse enough this holds on its own, and folding
 samples of stage-2-shaped inputs into the stage-1 data ensures the
 structure and vocabulary are present.
 
+Implemented as an additive free mode: prompts.py gains two exemplar-free
+types, document and dialogue, selected simply by naming them in
+generate.text_type_weights (configs/t1.yaml, dialogue-weighted 2:1); the
+grounded path stays intact as the baseline. Instruction-pair generation is
+left out of stage 1 (number_of_pairs 0, instruction_fraction 0) —
+instruction-shaped language is covered by the dialogue documents.
+
 ### Stage 2 — simulation training (the main effort)
 
 The model plays; the simulator scores. No gold actions anywhere.
@@ -72,12 +79,21 @@ Design constraints carried into implementation:
   over many parallel games absorbs most of the variance. Scoring a decision
   by its expected value given the information provided is a later
   refinement, kept as a dial.
-- The response format reserves an optional working-text field before the
-  decision (reasoning space), but it is disabled initially so results stay
-  interpretable; enabling it later is a measurable intervention, compared
-  at matched token budgets. Motivation: a forward pass can chain roughly as
-  many dependent steps as the model has layers, and emitted intermediate
-  tokens are the only way past that ceiling.
+- Decisions are reason-bearing: the model is required to say "let's do A
+  because B". The listener will not act on a bare decision without a
+  reason attached, but it does not judge the reason's quality — flawed
+  reasoning still acts. So the format is soft pressure, not a hard gate:
+  the listener simply acts more reliably when given reasons. The reason
+  clause also provides the hook for scoring reasoning later, which is
+  kept in mind but not built (how it would limit training is not yet
+  clear).
+- Beyond the single reason clause, extended working text before the
+  decision (open reasoning space) is reserved in the format but disabled
+  initially so results stay interpretable; enabling it later is a
+  measurable intervention, compared at matched token budgets. Motivation:
+  a forward pass can chain roughly as many dependent steps as the model
+  has layers, and emitted intermediate tokens are the only way past that
+  ceiling.
 
 **The forgiving listener.** The LLM interprets SGM output into the nearest
 sensible simulator action, so near-miss outputs still act on the world and
@@ -132,8 +148,8 @@ stage 2 works; nothing in stages 1-2 depends on it.
 
 ## What is new versus the existing code
 
-Stage 1 runs on the existing pipeline with a subtractive prompt change and
-conversation-heavy weights. Stage 2 adds roughly five modules (simulator,
+Stage 1 runs on the existing pipeline with an additive free-generation
+mode (document and dialogue types) and conversation-heavy weights. Stage 2 adds roughly five modules (simulator,
 renderer, listener client, online trainer, sim evaluation), reusing the
 training internals, vLLM handling, and submitter; the one piece without
 precedent in the repo is the long-running Slurm job co-locating the

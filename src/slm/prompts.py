@@ -19,11 +19,20 @@ carries a structural demand (plot for prose, worked order for reasoning, turns
 that do work for conversation). Diversity comes from independent structural
 axes (domain, tone, form, point of view, length, grounding kind) plus one
 exemplar sampled from a rotating pool per request.
+
+Alongside the grounded types, the free types (document, dialogue) generate
+the stage-1 language substrate of the SGM design: the generator LLM writes
+unconstrained, with no fact set, no exemplar, and only light topical and
+structural seeds, because constraint is what collapsed diversity in earlier
+corpora. A config selects free generation simply by naming the free types in
+generate.text_type_weights; the grounded path stays intact as the baseline.
 """
 
 from . import seeds, worldgen
 
 TEXT_TYPES = ['prose', 'conversation', 'definition', 'description', 'reasoning']
+
+FREE_TEXT_TYPES = ['document', 'dialogue']
 
 _BASE_RULES = (
     'You produce serious, well-formed English for training a language model on '
@@ -162,7 +171,14 @@ def build_system_prompt():
 
 
 def example_turns(text_type, random_generator):
-    """Return one sampled few-shot user and assistant turn for the text type."""
+    """Return one sampled few-shot turn pair, or None for exemplar-free types.
+
+    The free types carry no exemplar by design: a fixed example anchors the
+    generator's output toward itself, and the free mode exists to leave the
+    generator unconstrained.
+    """
+    if text_type not in _EXEMPLAR_POOLS:
+        return None
     answer = random_generator.choice(_EXEMPLAR_POOLS[text_type])
     instruction = _EXEMPLAR_INSTRUCTIONS[text_type]
     return [
@@ -296,12 +312,69 @@ def _reasoning_prompt(random_generator):
     )
 
 
+def _toned(tone):
+    article = 'an' if tone[0] in 'aeiou' else 'a'
+    return '%s %s tone' % (article, tone)
+
+
+def _document_prompt(random_generator):
+    domain = random_generator.choice(seeds.SUBJECT_DOMAINS)
+    length = random_generator.choice(seeds.LENGTH_BANDS)
+    tone = random_generator.choice(seeds.TONES)
+    if random_generator.random() < 0.5:
+        return (
+            'Write %s: %s, in %s, told from %s. Draw on %s for the '
+            'subject matter, and choose the particulars yourself.' % (
+                length,
+                random_generator.choice(seeds.PROSE_FORMS),
+                _toned(tone),
+                random_generator.choice(seeds.POINTS_OF_VIEW),
+                domain,
+            )
+        )
+    return (
+        'Write %s on a subject of your choosing from %s. The text should %s. '
+        'Write in %s, choosing the particulars yourself.' % (
+            length, domain,
+            random_generator.choice(seeds.REASONING_MODES),
+            _toned(tone),
+        )
+    )
+
+
+def _dialogue_prompt(random_generator):
+    speaker_count = 2 if random_generator.random() < 0.7 else 3
+    minimum_turns = random_generator.choice([8, 12, 16, 20])
+    if random_generator.random() < 0.5:
+        direction = 'The speakers should %s.' % (
+            random_generator.choice(seeds.DIALOGUE_GOALS)
+        )
+    else:
+        direction = (
+            'Choose yourself what the speakers want from the exchange.'
+        )
+    return (
+        'Write a conversation of at least %d turns between %d people, on a '
+        'subject of your choosing from %s, in %s. %s Give each '
+        'speaker a name and begin each turn with the name and a colon. Let '
+        'the conversation develop naturally, with questions, disagreement, '
+        'and shifts of direction where they arise.' % (
+            minimum_turns, speaker_count,
+            random_generator.choice(seeds.SUBJECT_DOMAINS),
+            _toned(random_generator.choice(seeds.TONES)),
+            direction,
+        )
+    )
+
+
 _BUILDERS = {
     'prose': _prose_prompt,
     'conversation': _conversation_prompt,
     'definition': _definition_prompt,
     'description': _description_prompt,
     'reasoning': _reasoning_prompt,
+    'document': _document_prompt,
+    'dialogue': _dialogue_prompt,
 }
 
 
