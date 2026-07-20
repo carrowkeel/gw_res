@@ -31,7 +31,6 @@ src/slm/
   pipeline.py       local orchestrator
   sample.py         diagnostic: raw base-model completions
   inspect.py        diagnostic: corpus yield, diversity, contamination
-  sim/              SGM redirection: schema.py and doctrine.yaml drafts
 slurm/
   submit.py             dependency-chained sbatch submitter
   example_stage.sbatch
@@ -554,35 +553,25 @@ from its corpus, not from alignment layers: operational register by
 default, graceful degradation to plain conversation, and structured
 outputs a program can parse.
 
-The design is recorded in full in `docs/sgm_mvp.md` (the MVP specification
-and the six-phase implementation plan) and crystallized in intent nodes
-53-56. In brief: a mission-day simulator (SIM) is the sole source of ground
-truth, running forward cheaply and adjudicating any state on demand through
-Architect-authored executable doctrine; the trained model (SGM, Small Graph
-Model) is a Graph-to-Graph function realized in v0 as the existing decoder
-over a canonical, invertible serialization of episode graphs; the LLM
-(Qwen) supplies language surfaces through offline compositional banks and
-never facts or logic; input surfaces vary while output commands are
-canonical and schema-parsed (read many, write canonical). The corpus has
-three tiers: a fresh unconstrained conversational substrate (T1, never
-below a 10-15 percent floor), freshly sampled simulation traffic (T2, a
-variable-length stage with metric stopping criteria), and real operational
-data (T3) held out as never-trained transfer probes.
+The design is recorded in full in `docs/sgm_mvp.md` (revised after
+convergence; an earlier imitation-based draft with a decision doctrine and
+graph serialization was superseded and its code drafts reverted) and
+crystallized in intent nodes 53-56. In brief, three stages, of which only
+the first trains by imitation: (1) language pretraining on documents and
+long conversation threads generated unconstrained, continuing until an
+empirically decided capability threshold; (2) simulation training, the
+main effort — the model plays an economic simulator (latent environment
+states driving a market, proxies delivered as language reports from
+labeled sources of varying reliability, buy/sell decisions, per-step
+scores), game-batched, with a forgiving listener LLM interpreting model
+output into actions at annealed strictness, updated by score-weighted
+cross-entropy on the model's own trajectories; (3) real problems as the
+transfer test, later. Graph input and output is explicitly a later
+implementation, gated on flat-form competence as before.
 
 All prior corpora and runs are retained on disk as baselines only. The
-scale-ladder submitter, run isolation, packing and replay, reserved-kind
-SFT, and the report machinery all carry forward unchanged; the novelty
-budget is spent on the SIM, the schema, the doctrine, the language layer,
-and the evaluation.
-
-Current state of the redirection: Phase 0 (this bookkeeping) is done, and
-Phase 1 has two review drafts in the tree — `src/slm/sim/schema.py` (typed
-episode-graph nodes and edges, the canonical command vocabulary, and
-validation) and `src/slm/sim/doctrine.yaml` (the Architect-authored
-decision doctrine draft: thresholds, prioritized rules over system metrics,
-and rationale codes). The doctrine file format is interpreted, not
-hardcoded: each rule names a metric path, a comparison against a literal or
-a named threshold, a canonical command with argument bindings, and a
-rationale code, with priority resolving conflicts deterministically.
-`dynamics.py`, `episode.py`, and the doctrine interpreter follow once the
-schema and doctrine drafts are reviewed.
+training internals, vLLM handling, replay machinery, run isolation, and
+the submitter carry forward; the genuinely new engineering is the
+simulator, the listener, the online trainer, and the long-running Slurm
+job co-locating training with the LLM service behind an asynchronous
+buffer.
