@@ -66,6 +66,24 @@ as well as per game. Complexity scales along clear knobs: number of stocks,
 number and coupling of latent states, noise, information lag, source
 reliability, misinformation.
 
+**Market v0 (implemented in src/slm/market.py).** Factor shocks are white
+noise, so prices are random walks and the report-blind expected return is
+zero by construction, not by tuning. The game is quarterly: the program
+pre-samples the next quarter's shocks and leaks a partial view of them as
+forecast reports (news items about factors, advisor buy/sell
+recommendations derived from the leaked set; both reliable in v0, with
+k=1 — advice is for the coming quarter). The model updates its position
+on the advice; the quarter resolves; the score is the change in portfolio
+value. Companies compete within fields: all companies in a field share
+its demand factor (umbrella makers gain when rain is coming) but each
+carries a different material's cost factor (the plastic umbrella maker
+does better when plastic gets cheaper), so the best pick in a field
+requires composing two reports. State reaches the model as a quarterly
+chat message (the quarter, holdings, prices, last quarter's earnings),
+moving to graph input later. Acceptance tests in the module self-check:
+a blind policy earns nothing on average, a report-reading oracle is
+clearly ahead, and games are deterministic given a seed.
+
 Design constraints carried into implementation:
 
 - The information advantage must be the only edge: price dynamics are
