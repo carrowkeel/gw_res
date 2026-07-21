@@ -1,0 +1,78 @@
+project:
+  name: sgm-t1-full
+  out_dir: runs/t1_full
+  seed: 1337
+
+generate:
+  default_model: Qwen/Qwen2.5-7B-Instruct
+  type_models: {}
+  text_type_weights:
+    document: 1.0
+    dialogue: 2.0
+  number_of_texts: 1000000
+  number_of_pairs: 0
+  temperature: 1.0
+  top_p: 0.95
+  frequency_penalty: 0.4
+  max_tokens: 1024
+  workers: 16
+  tensor_parallel_size: 1
+  gpu_memory_utilization: 0.90
+  max_model_len: 2048
+  dtype: bfloat16
+  batch_size: 512
+  apply_filter: true
+  deduplicate: true
+  minimum_characters: 200
+
+tokenizer:
+  vocabulary_size: 16000
+  minimum_frequency: 2
+
+model:
+  preset: poc-60m
+  block_size: 1024
+  dropout: 0.05
+  tie_embeddings: true
+
+pretrain:
+  batch_size: 24
+  gradient_accumulation_steps: 2
+  maximum_steps: 7000
+  learning_rate: 0.0004
+  minimum_learning_rate: 0.00004
+  warmup_steps: 300
+  weight_decay: 0.1
+  gradient_clip: 1.0
+  dtype: bfloat16
+  compile_model: true
+  log_interval: 20
+  evaluation_interval: 200
+  evaluation_iterations: 100
+  checkpoint_interval: 200
+  validation_fraction: 0.005
+  early_stop_patience: 0
+  instruction_fraction: 0.0
+
+eval:
+  judge_model: null
+  number_of_generation_samples: 40
+  number_of_probe_questions: 40
+  max_new_tokens: 200
+  temperature: 0.8
+  top_p: 0.95
+  repetition_penalty: 1.0
+  student_gpu_memory_utilization: 0.45
+  judge_gpu_memory_utilization: 0.45
+
+slurm:
+  enabled: true
+  partition: null
+  account: null
+  gres: gpu:l40s:1
+  memory: 64G
+  cpus_per_task: 8
+  time_limit: "24:00:00"
+  pretrain_gres: gpu:l40s:4
+  log_dir: runs/t1_full/slurm_logs
+  extra_sbatch: []
