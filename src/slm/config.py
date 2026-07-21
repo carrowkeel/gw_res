@@ -132,6 +132,37 @@ class FinetuneConfig:
 
 
 @dataclass
+class SimTrainConfig:
+    base_run_dir: str = None
+    games_per_batch: int = 32
+    quarters: int = 8
+    field_count: int = 3
+    companies_per_field: int = 2
+    maximum_steps: int = 2000
+    learning_rate: float = 1e-4
+    minimum_learning_rate: float = 1e-5
+    warmup_steps: int = 50
+    weight_decay: float = 0.1
+    beta1: float = 0.9
+    beta2: float = 0.95
+    gradient_clip: float = 1.0
+    dtype: str = 'bfloat16'
+    compile_model: bool = False
+    weight_temperature: float = 1.0
+    weight_clip: float = 5.0
+    replay_fraction: float = 0.2
+    sample_temperature: float = 1.0
+    sample_top_p: float = 0.95
+    max_decision_tokens: int = 48
+    listener_mode: str = 'pattern'
+    listener_model: str = None
+    render_mode: str = 'template'
+    log_interval: int = 10
+    checkpoint_interval: int = 100
+    best_window: int = 20
+
+
+@dataclass
 class EvalConfig:
     judge_model: str = None
     number_of_generation_samples: int = 200
@@ -189,6 +220,7 @@ class Config:
     model: ModelConfig = field(default_factory=ModelConfig)
     pretrain: PretrainConfig = field(default_factory=PretrainConfig)
     finetune: FinetuneConfig = field(default_factory=FinetuneConfig)
+    simtrain: SimTrainConfig = field(default_factory=SimTrainConfig)
     eval: EvalConfig = field(default_factory=EvalConfig)
     graph: GraphConfig = field(default_factory=GraphConfig)
     scale: ScaleConfig = field(default_factory=ScaleConfig)
@@ -225,6 +257,10 @@ class Config:
         return self.out_dir / 'checkpoints' / 'sft'
 
     @property
+    def simtrain_dir(self):
+        return self.out_dir / 'checkpoints' / 'simtrain'
+
+    @property
     def eval_dir(self):
         return self.out_dir / 'eval'
 
@@ -252,6 +288,7 @@ _SECTION_TYPES = {
     'model': ModelConfig,
     'pretrain': PretrainConfig,
     'finetune': FinetuneConfig,
+    'simtrain': SimTrainConfig,
     'eval': EvalConfig,
     'graph': GraphConfig,
     'scale': ScaleConfig,

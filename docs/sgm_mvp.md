@@ -164,13 +164,37 @@ stage 2 works; nothing in stages 1-2 depends on it.
 - Expected-value scoring of decisions; listener removal; reasoning space
   enablement — all dials designed in but switched off at the start.
 
-## What is new versus the existing code
+## Implementation state and pilot commands
 
-Stage 1 runs on the existing pipeline with an additive free-generation
-mode (document and dialogue types) and conversation-heavy weights. Stage 2 adds roughly five modules (simulator,
-renderer, listener client, online trainer, sim evaluation), reusing the
-training internals, vLLM handling, and submitter; the one piece without
-precedent in the repo is the long-running Slurm job co-locating the
-training process with the LLM service behind a queue. infer.py needs
-batched generation for parallel self-play. The grounded worldgen path is
-retired to a baseline, not deleted.
+Stage 1 runs on the existing pipeline with the additive free-generation
+mode (document and dialogue types, configs/t1.yaml). Stage 2 is
+implemented: market.py (simulator), render.py (template rendering),
+listener.py (pattern and llm modes), simtrain.py (the online trainer,
+runnable standalone or as the simtrain stage of the submitter), the
+simtrain config section, and configs/sim.yaml. The grounded worldgen
+path is retired to a baseline, not deleted.
+
+Pilot sequence:
+
+    python slurm/submit.py --config configs/t1.yaml \
+      --stages generate,tokenizer,data,pretrain
+
+Note the printed run id: the stage-1 tree lands at runs/t1-<id>. Then
+point simtrain.base_run_dir in configs/sim.yaml at that tree and
+
+    python slurm/submit.py --config configs/sim.yaml --stages simtrain
+
+The pilot runs on one L40S: the listener LLM is capped at 0.45 GPU
+memory and shares the device with the small training model (the same
+co-location the evaluator already uses); dedicating separate listener
+GPUs behind an asynchronous buffer is the scaling path, not a pilot
+requirement. Self-play generation is sequential per game within the
+lockstep quarter (the model is small); batching it is a later
+optimization.
+
+Reading early metrics: a fresh stage-1 model will start with a high
+no-reason rate (turns gated to hold, return near the blind reference);
+progress appears first as the no-reason rate falling, then the acted and
+exact-match rates rising, then mean return climbing off the blind
+reference toward the oracle reference. The trainer logs all of these
+every step to history.jsonl alongside both reference returns.

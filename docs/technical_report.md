@@ -31,6 +31,10 @@ src/slm/
   pipeline.py       local orchestrator
   sample.py         diagnostic: raw base-model completions
   inspect.py        diagnostic: corpus yield, diversity, contamination
+  market.py         SGM stage 2: economic market simulator
+  render.py         SGM stage 2: template rendering of game text
+  listener.py       SGM stage 2: gate and interpret trader turns
+  simtrain.py       SGM stage 2: online score-weighted trainer
 slurm/
   submit.py             dependency-chained sbatch submitter
   example_stage.sbatch

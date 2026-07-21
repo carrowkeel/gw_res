@@ -31,7 +31,7 @@ tokenizer:
 
 model:
   preset: pico
-  block_size: 512
+  block_size: 1024
   dropout: 0.15
   tie_embeddings: true
 

@@ -40,7 +40,8 @@ from slm.config import load_config, save_config
 RUNG_STAGES = ['tokenizer', 'data', 'pretrain', 'finetune', 'evaluate']
 
 ALL_STAGES = [
-    'generate', 'tokenizer', 'data', 'pretrain', 'finetune', 'evaluate',
+    'generate', 'tokenizer', 'data', 'pretrain', 'finetune', 'simtrain',
+    'evaluate',
     'graph_transform', 'graph_tokenizer', 'graph_data', 'graph_pretrain',
     'graph_evaluate',
 ]
@@ -48,7 +49,7 @@ DEFAULT_STAGES = [
     'generate', 'tokenizer', 'data', 'pretrain', 'finetune', 'evaluate',
 ]
 GPU_STAGES = {
-    'generate', 'pretrain', 'finetune', 'evaluate',
+    'generate', 'pretrain', 'finetune', 'simtrain', 'evaluate',
     'graph_pretrain', 'graph_evaluate',
 }
 
