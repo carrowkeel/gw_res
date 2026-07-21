@@ -113,9 +113,11 @@ def _play_batch(model, tokenizer, config, llm_listener, step, block_size,
             'token_ids': [tokenizer.bos_id],
             'spans': [],
             'earnings': [],
+            'turn_records': [],
         })
     stats = {'turns': 0, 'no_reason': 0, 'acted': 0,
-             'match_exact': 0, 'match_fuzzy': 0, 'match_none': 0}
+             'match_exact': 0, 'match_fuzzy': 0, 'match_none': 0,
+             'advisor_earnings': [], 'no_advisor_earnings': []}
     sample_turn = None
     for quarter in range(simtrain_config.quarters):
         turns = []
@@ -143,18 +145,36 @@ def _play_batch(model, tokenizer, config, llm_listener, step, block_size,
             ]
         if sample_turn is None and turns:
             sample_turn = (turns[0][0], results[0])
-        for game, result in zip(games, results):
+        for game, turn, result in zip(games, turns, results):
             stats['turns'] += 1
             if not result['reason_given']:
                 stats['no_reason'] += 1
             if result['acted']:
                 stats['acted'] += 1
             stats['match_%s' % result['match']] += 1
-            earnings, _ = market.step_game(
+            advisor_present = any(
+                report['source'] == 'advisor'
+                for report in game['state']['reports']
+            )
+            earnings, executed = market.step_game(
                 game['market'], game['state'], result['actions'],
                 game['random'],
             )
             game['earnings'].append(earnings)
+            if advisor_present:
+                stats['advisor_earnings'].append(earnings)
+            else:
+                stats['no_advisor_earnings'].append(earnings)
+            game['turn_records'].append({
+                'quarter': quarter + 1,
+                'decision': turn[0],
+                'rewrite': result['rewrite'],
+                'reason_given': result['reason_given'],
+                'match': result['match'],
+                'executed': executed,
+                'advisor_present': advisor_present,
+                'earnings': round(earnings, 2),
+            })
     return games, stats, sample_turn
 
 
@@ -343,6 +363,7 @@ def run(config):
                 min=1.0
             )
             loss = game_loss
+            replay_loss = None
             if replay is not None:
                 replay_inputs, replay_targets = replay.get_batch(
                     max(1, int(simtrain_config.games_per_batch
@@ -369,18 +390,46 @@ def run(config):
             recent_returns.pop(0)
         rolling = statistics.mean(recent_returns)
 
+        positive_weights = weights[weights > 0]
+        row = {
+            'step': step,
+            'loss': round(loss.item(), 4),
+            'game_loss': round(game_loss.item(), 4),
+            'mean_return': round(mean_return, 2),
+            'rolling_return': round(rolling, 2),
+            'no_reason_rate': round(stats['no_reason'] / stats['turns'], 3),
+            'acted_rate': round(stats['acted'] / stats['turns'], 3),
+            'match_exact_rate': round(
+                stats['match_exact'] / stats['turns'], 3),
+            'match_fuzzy_rate': round(
+                stats['match_fuzzy'] / stats['turns'], 3),
+            'weight_mean': round(positive_weights.mean().item(), 3)
+            if len(positive_weights) else 0.0,
+            'weight_max': round(positive_weights.max().item(), 3)
+            if len(positive_weights) else 0.0,
+        }
+        if replay_loss is not None:
+            row['replay_loss'] = round(replay_loss.item(), 4)
+        if stats['advisor_earnings']:
+            row['return_with_advisor'] = round(
+                statistics.mean(stats['advisor_earnings']), 2)
+        if stats['no_advisor_earnings']:
+            row['return_without_advisor'] = round(
+                statistics.mean(stats['no_advisor_earnings']), 2)
         with open(history_path, 'a') as handle:
-            handle.write(json.dumps({
-                'step': step,
-                'loss': round(loss.item(), 4),
-                'mean_return': round(mean_return, 2),
-                'rolling_return': round(rolling, 2),
-                'no_reason_rate': round(
-                    stats['no_reason'] / stats['turns'], 3),
-                'acted_rate': round(stats['acted'] / stats['turns'], 3),
-                'match_exact_rate': round(
-                    stats['match_exact'] / stats['turns'], 3),
-            }) + '\n')
+            handle.write(json.dumps(row) + '\n')
+
+        if (simtrain_config.transcript_interval
+                and step % simtrain_config.transcript_interval == 0):
+            with open(checkpoint_directory / 'transcripts.jsonl',
+                      'a') as handle:
+                for game in games[:simtrain_config.transcript_games]:
+                    handle.write(json.dumps({
+                        'step': step,
+                        'text': tokenizer.decode(game['token_ids']),
+                        'turns': game['turn_records'],
+                        'total_earnings': round(sum(game['earnings']), 2),
+                    }, ensure_ascii=False) + '\n')
 
         if step % simtrain_config.log_interval == 0:
             elapsed = time.time() - interval_start

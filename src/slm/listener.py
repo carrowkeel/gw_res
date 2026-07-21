@@ -110,10 +110,10 @@ def interpret(text, market, state):
     has_reason = reason_given(text)
     if not has_reason:
         return {'actions': [], 'reason_given': False, 'match': 'none',
-                'acted': False}
+                'acted': False, 'rewrite': None}
     actions, match = parse_orders(text, market, state)
     return {'actions': actions, 'reason_given': True, 'match': match,
-            'acted': bool(actions)}
+            'acted': bool(actions), 'rewrite': None}
 
 
 def _rewrite_prompt(text, market, state):
@@ -160,7 +160,8 @@ class LlmListener:
         for index, (text, market, state) in enumerate(turns):
             if not reason_given(text):
                 results[index] = {'actions': [], 'reason_given': False,
-                                  'match': 'none', 'acted': False}
+                                  'match': 'none', 'acted': False,
+                                  'rewrite': None}
             else:
                 pending.append(index)
         if pending:
@@ -181,5 +182,6 @@ class LlmListener:
                     if direct != actions:
                         match = 'fuzzy'
                 results[index] = {'actions': actions, 'reason_given': True,
-                                  'match': match, 'acted': bool(actions)}
+                                  'match': match, 'acted': bool(actions),
+                                  'rewrite': rewrite}
         return results
