@@ -1,0 +1,57 @@
+project:
+  name: sgm-sim
+  out_dir: runs/sim
+  seed: 1337
+
+simtrain:
+  base_run_dir: runs/t1
+  games_per_batch: 32
+  quarters: 8
+  field_count: 3
+  companies_per_field: 2
+  maximum_steps: 2000
+  learning_rate: 0.0001
+  minimum_learning_rate: 0.00001
+  warmup_steps: 50
+  weight_decay: 0.1
+  gradient_clip: 1.0
+  dtype: bfloat16
+  compile_model: false
+  weight_temperature: 1.0
+  weight_clip: 5.0
+  replay_fraction: 0.2
+  sample_temperature: 1.0
+  sample_top_p: 0.95
+  max_decision_tokens: 48
+  listener_mode: llm
+  listener_model: null
+  render_mode: template
+  log_interval: 10
+  checkpoint_interval: 100
+  best_window: 20
+
+model:
+  preset: pico
+  block_size: 1024
+  dropout: 0.1
+  tie_embeddings: true
+
+generate:
+  default_model: Qwen/Qwen2.5-7B-Instruct
+  gpu_memory_utilization: 0.45
+  max_model_len: 2048
+  dtype: bfloat16
+  max_tokens: 96
+  temperature: 0.2
+  top_p: 0.9
+
+slurm:
+  enabled: true
+  partition: null
+  account: null
+  gres: gpu:l40s:1
+  memory: 64G
+  cpus_per_task: 8
+  time_limit: "12:00:00"
+  log_dir: runs/sim/slurm_logs
+  extra_sbatch: []

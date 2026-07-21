@@ -23,134 +23,158 @@ import random
 
 from . import seeds
 
-MATERIALS = [
-    'copper', 'oak', 'iron', 'ash', 'tin', 'birch', 'leather', 'stone',
-    'brass', 'elm', 'pine', 'steel',
+QUALIFIERS = [
+    'gray', 'black', 'white', 'blue', 'red', 'green', 'silver', 'yellow',
+    'orange', 'brown',
+]
+
+# Ordinary modern first names, mixed with invented ones when sampling people,
+# so surfaces read as everyday life rather than an invented archaic world.
+COMMON_NAMES = [
+    'Nora', 'Sam', 'Elena', 'Marcus', 'Priya', 'Omar', 'Lily', 'Felix',
+    'Maya', 'Jonas', 'Clara', 'Ravi', 'Anna', 'Leo', 'Sofia', 'Tariq',
+    'Ines', 'Dana', 'Hugo', 'Mira', 'Pavel', 'Alma', 'Kenji', 'Rosa',
+    'Dev', 'Greta', 'Idris', 'Nina', 'Tomas', 'Zara',
 ]
 
 # Each domain supplies its own places, objects, and countable goods so the
-# sampled worlds range over many registers rather than one workshop scene.
-# Names stay generic (no real-world proper referents); variety comes from the
-# vocabulary itself.
+# sampled worlds range over many registers. The registers are deliberately
+# modern and real-world (offices, clinics, depots), because the absence of
+# real-world referents is a deferred objective: the program supplies the
+# logic, and the surface should read like the everyday world the generator
+# LLM writes best, not an invented archaic one.
 DOMAINS = {
-    'workshop': {
-        'label': 'workshops and trades',
+    'office': {
+        'label': 'offices and everyday work',
         'places': [
-            'mill', 'forge', 'market hall', 'granary', 'boathouse',
-            'weaving shed', 'brewhouse', 'stable', 'printworks', 'bakery',
+            'head office', 'records room', 'meeting room', 'print room',
+            'mail room', 'staff kitchen', 'supply closet', 'reception desk',
+            'archive room',
         ],
         'objects': [
-            'kettle', 'chest', 'ladder', 'anvil', 'loom', 'cart', 'barrel',
-            'lantern', 'plough', 'bench', 'clock', 'press',
+            'printer', 'filing cabinet', 'whiteboard', 'projector',
+            'coffee machine', 'shredder', 'standing desk', 'notice board',
+            'water cooler', 'photocopier',
         ],
         'goods': [
-            'sacks of grain', 'coils of rope', 'clay jars', 'bolts of cloth',
-            'bundles of firewood', 'boxes of nails', 'sheets of tin',
+            'reams of paper', 'boxes of pens', 'folders of invoices',
+            'packs of envelopes', 'rolls of tape', 'boxes of staples',
         ],
     },
-    'harbor': {
-        'label': 'harbors and the sea',
+    'clinic': {
+        'label': 'clinics and care',
         'places': [
-            'quay', 'lighthouse', 'ferry landing', 'chandlery', 'fish market',
-            'harbor office', 'shipyard', 'salt store', 'net loft',
+            'health clinic', 'pharmacy', 'waiting room', 'therapy room',
+            'dental surgery', 'care home', 'ambulance station', 'medical lab',
         ],
         'objects': [
-            'skiff', 'net', 'anchor', 'oar', 'buoy', 'mast', 'compass',
-            'harpoon', 'tide bell', 'sea chest',
+            'wheelchair', 'supply cart', 'examination table',
+            'medicine cabinet', 'sterilizer', 'stretcher', 'oxygen tank',
+            'first-aid kit',
         ],
         'goods': [
-            'barrels of salt fish', 'coils of anchor line', 'crates of oysters',
-            'casks of lamp oil', 'bundles of sailcloth', 'baskets of crabs',
+            'boxes of gloves', 'bottles of sanitizer', 'rolls of bandage',
+            'packs of syringes', 'boxes of masks', 'bottles of vitamins',
         ],
     },
-    'farm': {
-        'label': 'farms and orchards',
+    'school': {
+        'label': 'schools and learning',
         'places': [
-            'orchard', 'dairy', 'seed store', 'threshing barn', 'cider house',
-            'sheepfold', 'well house', 'beeyard', 'hay loft',
+            'primary school', 'library', 'science lab', 'gymnasium',
+            'music room', 'computer room', 'cafeteria', 'art studio',
+            'lecture hall',
         ],
         'objects': [
-            'scythe', 'churn', 'beehive', 'rake', 'trough', 'sieve',
-            'harrow', 'milk pail', 'grain bin', 'apple press',
+            'bookshelf', 'globe', 'microscope', 'piano', 'easel',
+            'chalkboard', 'laptop cart', 'display case', 'telescope',
         ],
         'goods': [
-            'crates of apples', 'pails of milk', 'sacks of seed',
-            'jars of honey', 'bushels of barley', 'baskets of eggs',
+            'boxes of chalk', 'stacks of textbooks', 'packs of notebooks',
+            'jars of paint', 'boxes of markers', 'crates of sports gear',
         ],
     },
-    'market': {
-        'label': 'markets and trade',
+    'cafe': {
+        'label': 'cafes and kitchens',
         'places': [
-            'counting house', 'cloth hall', 'auction yard', 'warehouse',
-            'coin exchange', 'tea house', 'spice hall', 'toll booth',
+            'corner cafe', 'bakery', 'pizzeria', 'food market', 'juice bar',
+            'canteen', 'ice cream parlor', 'tea room', 'delicatessen',
         ],
         'objects': [
-            'scale', 'ledger', 'strongbox', 'abacus', 'seal', 'banner',
-            'till', 'measuring rod', 'coin tray', 'sample case',
+            'espresso machine', 'pastry case', 'blender', 'menu board',
+            'cash register', 'bread oven', 'dough mixer', 'refrigerator',
+            'serving trolley',
         ],
         'goods': [
-            'rolls of silk', 'chests of tea', 'bags of pepper',
-            'bars of soap', 'reams of paper', 'boxes of candles',
+            'bags of coffee beans', 'trays of pastries', 'crates of oranges',
+            'cartons of milk', 'loaves of bread', 'jars of jam',
+            'boxes of tea',
         ],
     },
-    'study': {
-        'label': 'study and record-keeping',
+    'depot': {
+        'label': 'warehouses and deliveries',
         'places': [
-            'lecture hall', 'scriptorium', 'archive', 'observatory',
-            'map room', 'bindery', 'instrument room', 'reading room',
+            'warehouse', 'loading dock', 'distribution center',
+            'storage yard', 'freight office', 'packing hall',
+            'container depot', 'repair garage',
         ],
         'objects': [
-            'globe', 'atlas', 'inkstand', 'telescope', 'slate', 'hourglass',
-            'star chart', 'letter press', 'specimen cabinet', 'music stand',
+            'forklift', 'delivery van', 'pallet jack', 'conveyor belt',
+            'hand truck', 'weighing scale', 'shipping container',
+            'packing table',
         ],
         'goods': [
-            'reams of paper', 'pots of ink', 'bundles of quills',
-            'rolls of parchment', 'boxes of chalk', 'folders of maps',
+            'pallets of boxes', 'rolls of packing tape', 'crates of parts',
+            'stacks of pallets', 'boxes of labels', 'drums of oil',
         ],
     },
-    'infirmary': {
-        'label': 'healing and remedies',
+    'studio': {
+        'label': 'studios and media',
         'places': [
-            'infirmary', 'apothecary', 'herb garden', 'spring house',
-            'surgery', 'still room', 'convalescent ward', 'bath house',
+            'recording studio', 'radio station', 'theater', 'gallery',
+            'print shop', 'photo studio', 'rehearsal room', 'editing suite',
         ],
         'objects': [
-            'mortar', 'flask', 'cot', 'salve pot', 'herb press',
-            'tonic cabinet', 'bandage roll', 'scale', 'ointment jar',
+            'camera', 'mixing desk', 'spotlight', 'drum kit',
+            'microphone stand', 'poster rack', 'amplifier', 'tripod',
         ],
         'goods': [
-            'bottles of tonic', 'bundles of herbs', 'rolls of bandage',
-            'jars of salve', 'boxes of lozenges', 'flasks of spirits',
+            'reels of cable', 'boxes of records', 'rolls of film',
+            'stacks of posters', 'cases of stage bulbs', 'crates of props',
         ],
     },
-    'inn': {
-        'label': 'inns and households',
+    'transit': {
+        'label': 'stations and travel',
         'places': [
-            'inn', 'coach house', 'kitchen garden', 'laundry', 'cellar',
-            'common room', 'pantry', 'wash house', 'wood store',
+            'bus depot', 'train station', 'airport terminal',
+            'ferry terminal', 'taxi stand', 'service station',
+            'parking garage', 'ticket office',
         ],
         'objects': [
-            'cauldron', 'wardrobe', 'mirror', 'roasting spit', 'wash tub',
-            'linen chest', 'candle stand', 'ale cask', 'bread oven',
+            'luggage cart', 'ticket machine', 'departure board', 'fuel pump',
+            'bicycle rack', 'vending machine', 'information kiosk',
+            'baggage scanner',
         ],
         'goods': [
-            'loaves of bread', 'casks of ale', 'jars of preserves',
-            'bundles of linen', 'baskets of turnips', 'wheels of cheese',
+            'crates of luggage tags', 'boxes of timetables',
+            'cans of de-icer', 'cartons of snacks', 'bundles of maps',
+            'boxes of tickets',
         ],
     },
-    'road': {
-        'label': 'roads and travel',
+    'sports': {
+        'label': 'sports and leisure',
         'places': [
-            'waystation', 'toll gate', 'bridge house', 'coach yard',
-            'signal tower', 'ferry crossing', 'post office', 'stable yard',
+            'sports hall', 'swimming pool', 'football ground',
+            'climbing gym', 'tennis club', 'rowing club', 'skate park',
+            'community center',
         ],
         'objects': [
-            'wagon', 'saddle', 'signpost', 'trunk', 'map case', 'lantern',
-            'harness', 'post bag', 'wheel jack', 'road log',
+            'rowing machine', 'scoreboard', 'trophy cabinet', 'ball cart',
+            'exercise bike', 'climbing rope', 'kayak', 'table tennis table',
         ],
         'goods': [
-            'bales of hay', 'parcels of post', 'sacks of oats',
-            'bundles of maps', 'crates of lanterns', 'kegs of tar',
+            'bags of tennis balls', 'crates of water bottles',
+            'stacks of towels', 'boxes of shuttlecocks', 'sets of jerseys',
+            'bags of chalk powder',
         ],
     },
 }
@@ -169,12 +193,12 @@ _TEMPLATES = {
     'lives': [
         '%(person)s lives at %(place)s.',
         'The home of %(person)s is %(place)s.',
-        '%(person)s has rooms at %(place)s.',
+        '%(person)s has an apartment at %(place)s.',
     ],
     'works': [
         '%(person)s works at %(place)s.',
         '%(person)s spends the working day at %(place)s.',
-        'The wages of %(person)s are paid at %(place)s.',
+        '%(person)s is on the payroll at %(place)s.',
     ],
     'owns': [
         'The %(object)s belongs to %(person)s.',
@@ -196,8 +220,8 @@ _TEMPLATES = {
     ],
     'age': [
         '%(person)s is %(years)d years old.',
-        'At %(years)d years old, %(person)s is well known there.',
-        '%(person)s has seen %(years)d years.',
+        '%(person)s turned %(years)d this year.',
+        'At %(years)d, %(person)s is a familiar face there.',
     ],
 }
 
@@ -221,7 +245,10 @@ def sample_world(random_generator, people=3, places=3, objects=4, domain=None):
     vocabulary = DOMAINS[domain]
     person_names = []
     while len(person_names) < people:
-        name = seeds.invented_name(random_generator)
+        if random_generator.random() < 0.5:
+            name = random_generator.choice(COMMON_NAMES)
+        else:
+            name = seeds.invented_name(random_generator)
         if name not in person_names:
             person_names.append(name)
     place_list = [
@@ -229,9 +256,9 @@ def sample_world(random_generator, people=3, places=3, objects=4, domain=None):
         for kind in random_generator.sample(vocabulary['places'], places)
     ]
     object_list = [
-        '%s %s' % (material, kind)
-        for material, kind in _sample_unique(
-            random_generator, MATERIALS, vocabulary['objects'], objects
+        '%s %s' % (qualifier, kind)
+        for qualifier, kind in _sample_unique(
+            random_generator, QUALIFIERS, vocabulary['objects'], objects
         )
     ]
     age_order = list(person_names)
@@ -664,27 +691,40 @@ def sample_pair_grounding(random_generator):
 _DECLINE_MARKERS = ['not stated', 'not given', 'does not say', 'not mentioned']
 
 
-def score_binding_answer(task, output):
-    """Return 1.0 if the model output names the gold answer, else 0.0.
-
-    The gold answer must appear in the head of the output; in a two-way
-    comparison the wrong candidate must not appear before it. For a notstated
-    task the gold behavior is declining: any recognized decline phrasing
-    scores, and a specific fabricated answer does not.
-    """
-    head = ' '.join(output.strip().lower().split())[:120]
+def _region_score(task, region):
     gold = task['answer'].lower()
-    if task['answer'] == NOT_STATED_ANSWER:
-        return 1.0 if any(marker in head for marker in _DECLINE_MARKERS) else 0.0
-    gold_position = head.find(gold)
+    gold_position = region.find(gold)
     if gold_position == -1:
         return 0.0
     distractor = task.get('distractor')
     if distractor:
-        distractor_position = head.find(distractor.lower())
+        distractor_position = region.find(distractor.lower())
         if distractor_position != -1 and distractor_position < gold_position:
             return 0.0
     return 1.0
+
+
+def score_binding_answer(task, output):
+    """Return 1.0 if the model output names the gold answer, else 0.0.
+
+    The gold answer must lead either the head of the output (a direct answer)
+    or its tail (the conclusion of a step-by-step derivation, the style half
+    the training pairs use, where the answer arrives last after a restatement
+    of the facts); in a two-way comparison the wrong candidate must not appear
+    before the gold within the scored region. For a notstated task the gold
+    behavior is declining: any recognized decline phrasing scores, and a
+    specific fabricated answer does not.
+    """
+    text = ' '.join(output.strip().lower().split())
+    if task['answer'] == NOT_STATED_ANSWER:
+        return 1.0 if any(marker in text for marker in _DECLINE_MARKERS) else 0.0
+    head = text[:120]
+    # The conclusion region is the final sentence: a wider window would catch
+    # the last derivation step, where a comparison restates the facts with the
+    # wrong candidate leading.
+    sentences = [part for part in text.split('.') if part.strip()]
+    conclusion = sentences[-1] if sentences else ''
+    return max(_region_score(task, head), _region_score(task, conclusion))
 
 
 def main():

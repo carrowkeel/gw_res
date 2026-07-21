@@ -110,9 +110,12 @@ Grounding kinds: **fragment** (a small relational world of invented people,
 places, and objects), **transfer** (countable-goods arithmetic), **ratio**
 (invented units with exact conversion factors), **order** (a comparison chain
 with direction-inverting surface forms and transitive pairwise questions).
-Worlds are sampled from eight domain lexicons (workshops, harbors, farms,
-markets, study, healing, inns, roads), each with its own places, objects, and
-goods, so the corpus does not collapse into one register; fragments state
+Worlds are sampled from eight modern, real-world domain lexicons (offices,
+clinics, schools, cafes, warehouses, studios, transit, sports), each with its
+own places, objects, and goods, and people mix ordinary first names with
+invented ones - the absence of real-world referents is a deferred objective,
+so surfaces read like everyday life rather than an invented archaic world,
+and the corpus does not collapse into one register; fragments state
 ages either relatively or in absolute years (so comparisons must sometimes be
 derived from numbers), and fragment questions span four categories:
 **retrieval** (read one stated fact back), **comparison**, **multihop**

@@ -31,6 +31,10 @@ src/slm/
   pipeline.py       local orchestrator
   sample.py         diagnostic: raw base-model completions
   inspect.py        diagnostic: corpus yield, diversity, contamination
+  market.py         SGM stage 2: economic market simulator
+  render.py         SGM stage 2: template rendering of game text
+  listener.py       SGM stage 2: gate and interpret trader turns
+  simtrain.py       SGM stage 2: online score-weighted trainer
 slurm/
   submit.py             dependency-chained sbatch submitter
   example_stage.sbatch
@@ -205,10 +209,15 @@ Implements the working half of the world-state mechanism (node 36):
 whose facts are consistent by construction (residence, workplace, ownership,
 and storage are functions; ages carry both a total rank order and consistent
 absolute years, sizes a rank order, so every comparison has a unique answer).
-Worlds draw their vocabulary from one of eight domain lexicons (`DOMAINS`:
-workshop, harbor, farm, market, study, infirmary, inn, road), each with its
-own places, objects, and countable goods, added after the first grounded run
-showed the corpus collapsing into a single artisan register. `_fragment`
+Worlds draw their vocabulary from one of eight modern, real-world domain
+lexicons (`DOMAINS`: office, clinic, school, cafe, depot, studio, transit,
+sports), each with its own places, objects (qualified by color rather than
+material), and countable goods, and person names mix ordinary modern first
+names (`COMMON_NAMES`) with invented ones. The first broadening attempt used
+eight pre-industrial registers, which merely varied the same invented archaic
+world; since referent-freeness is a deferred objective, the registers were
+replaced with everyday modern ones so the surface reads like the world the
+generator LLM writes best while the program still authors all logic. `_fragment`
 verbalizes a focus person's neighborhood through varied templates, including
 surface forms that invert the stated relation, and states ages either
 relatively or as absolute years (so the comparison must sometimes be derived
@@ -492,6 +501,38 @@ generation leads (node 52):
 the new sub-scores (multihop, notstated) say what scale is actually needed
 for. **M3 (node 50)**: unchanged, gated on binding, which now stands at 0.78.
 
+## Second ladder result (world-52c749db) and two corrections
+
+The broadened ladder ran and delivered the mechanism's main claim: **SFT now
+adds capability**. At the full rung, grounded exact-match rose 0.28 to 0.60
+and binding 0.38 to 0.73 from pretrain to sft, with the reserved kinds doing
+the work (multihop 1.0 and notstated 0.75 at sft in grounded instructions) --
+the first meaningful pretrain-to-sft delta since co-training was adopted, and
+by design a capability gain rather than a distribution repeat. Two
+corrections came out of reading the reports:
+
+- **Scorer artifact (fixed).** Exact-match read only the first 120
+  characters, but half the pairs train a step-by-step style whose conclusion
+  arrives last; verbally correct derivations (a ratio answer ending "one
+  hauvel is worth 35 nooutors", a comparison ending "the copper chest is
+  larger") scored wrong, understating grounded exact-match (ratio 0.33 and
+  retrieval 0.4 at full-sft are floors, not measurements).
+  `score_binding_answer` now also accepts the gold leading the final
+  sentence, so direct answers and worked derivations both score; the final
+  sentence, not a character window, because a wider tail catches the last
+  derivation step where a comparison restates the facts with the wrong
+  candidate leading.
+- **Register correction (this change).** The first broadening produced eight
+  flavors of the same invented pre-industrial world -- cosmetic diversity.
+  Replaced with modern everyday registers and mixed ordinary names, per the
+  standing priority that referent-freeness is deferred.
+
+Judged fluency dipped (grammar 4.9 at full pretrain versus 6.8 on the narrow
+corpus), but the instrument changed with it: completion seeds are now half
+grounded, and a fact-list continuation of a grounded seed is in-distribution
+yet judged poorly as prose. Read fluency across the next run's stages, not
+against the previous ladder.
+
 ## Smaller follow-ups
 
 - **Extend worldgen further.** Round-trip verification of rendered text
@@ -502,3 +543,39 @@ for. **M3 (node 50)**: unchanged, gated on binding, which now stands at 0.78.
 - **Cosmetic cleanup**: remove the vestigial `<|user|>`/`<|assistant|>` tokens
   from `TokenizerConfig.special_tokens`; they are remnants of the abandoned
   role-token design and nothing reads them.
+
+## Redirection: the SGM, a simulator-grounded controller (nodes 53-56)
+
+The project target changed after the second ladder. Both corpus extremes
+failed in opposite directions — free LLM writing gave fluency with binding
+at chance, and the fully grounded corpus gave binding at 0.73-0.81 while
+collapsing general language to schema (the model answered "Hello" with a
+fabricated fact) — and the user redirected the goal away from prose-writing
+models entirely. The new target (node 53) is a NASA-like mission controller
+whose communication, reasoning, delegation, and risk understanding come
+from its corpus, not from alignment layers: operational register by
+default, graceful degradation to plain conversation, and structured
+outputs a program can parse.
+
+The design is recorded in full in `docs/sgm_mvp.md` (revised after
+convergence; an earlier imitation-based draft with a decision doctrine and
+graph serialization was superseded and its code drafts reverted) and
+crystallized in intent nodes 53-56. In brief, three stages, of which only
+the first trains by imitation: (1) language pretraining on documents and
+long conversation threads generated unconstrained, continuing until an
+empirically decided capability threshold; (2) simulation training, the
+main effort — the model plays an economic simulator (latent environment
+states driving a market, proxies delivered as language reports from
+labeled sources of varying reliability, buy/sell decisions, per-step
+scores), game-batched, with a forgiving listener LLM interpreting model
+output into actions at annealed strictness, updated by score-weighted
+cross-entropy on the model's own trajectories; (3) real problems as the
+transfer test, later. Graph input and output is explicitly a later
+implementation, gated on flat-form competence as before.
+
+All prior corpora and runs are retained on disk as baselines only. The
+training internals, vLLM handling, replay machinery, run isolation, and
+the submitter carry forward; the genuinely new engineering is the
+simulator, the listener, the online trainer, and the long-running Slurm
+job co-locating training with the LLM service behind an asynchronous
+buffer.
