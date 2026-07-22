@@ -7,6 +7,7 @@ chat-style response helpers used by the evaluator.
 
 from .model import GPT, build_config
 from .tokenizer import SyntheticTokenizer
+from .utils import normalize_state_dict
 
 
 class StudentModel:
@@ -19,7 +20,7 @@ class StudentModel:
         self.tokenizer = SyntheticTokenizer(config.tokenizer_path)
         gpt_config = build_config(config.model, saved['vocabulary_size'])
         self.model = GPT(gpt_config).to(self.device).eval()
-        self.model.load_state_dict(saved['model'])
+        self.model.load_state_dict(normalize_state_dict(saved['model']))
         self.block_size = gpt_config.block_size
 
     def complete(self, text, max_new_tokens=256, temperature=0.8, top_p=0.95,

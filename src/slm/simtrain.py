@@ -36,7 +36,7 @@ from .config import load_config, to_dict
 from .model import GPT, build_config
 from .pretrain import learning_rate_at
 from .tokenizer import SyntheticTokenizer
-from .utils import ensure_directory, get_logger, set_seed
+from .utils import ensure_directory, get_logger, normalize_state_dict, set_seed
 
 logger = get_logger('simtrain')
 
@@ -267,7 +267,7 @@ def run(config):
     gpt_config = build_config(config.model, vocabulary_size)
     model = GPT(gpt_config).to(device)
     if checkpoint is not None:
-        model.load_state_dict(checkpoint['model'])
+        model.load_state_dict(normalize_state_dict(checkpoint['model']))
     block_size = gpt_config.block_size
     logger.info('model: %.2fM parameters, block size %d',
                 model.count_parameters() / 1e6, block_size)
@@ -309,7 +309,7 @@ def run(config):
     last_checkpoint = checkpoint_directory / 'ckpt_last.pt'
     if last_checkpoint.exists():
         saved = torch.load(last_checkpoint, map_location=device)
-        base_model.load_state_dict(saved['model'])
+        base_model.load_state_dict(normalize_state_dict(saved['model']))
         optimizer.load_state_dict(saved['optimizer'])
         start_step = saved['step'] + 1
         logger.info('resumed from step %d', start_step)

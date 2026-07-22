@@ -22,7 +22,7 @@ import numpy
 from .config import load_config, to_dict
 from .model import GPT, build_config
 from .tokenizer import SyntheticTokenizer
-from .utils import ensure_directory, get_logger, set_seed
+from .utils import ensure_directory, get_logger, normalize_state_dict, set_seed
 
 logger = get_logger('finetune')
 
@@ -36,7 +36,7 @@ def _load_pretrained(config, device):
     saved = torch.load(checkpoint_path, map_location=device)
     gpt_config = build_config(config.model, saved['vocabulary_size'])
     model = GPT(gpt_config).to(device)
-    model.load_state_dict(saved['model'])
+    model.load_state_dict(normalize_state_dict(saved['model']))
     logger.info('loaded pretrained weights from %s', checkpoint_path)
     return model, gpt_config
 
