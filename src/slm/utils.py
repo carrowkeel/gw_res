@@ -41,6 +41,27 @@ def ensure_directory(path):
     return path
 
 
+def normalize_state_dict(state):
+    """Strip torch.compile and DistributedDataParallel prefixes from keys.
+
+    A checkpoint saved from a wrapped model carries '_orig_mod.' (compile)
+    or 'module.' (DDP) key prefixes, in either order, which a plain model
+    cannot load strictly. Stripping at load time keeps every checkpoint
+    readable regardless of how the training run wrapped its model.
+    """
+    prefixes = ('_orig_mod.', 'module.')
+    stripped = True
+    while stripped and state:
+        stripped = False
+        for prefix in prefixes:
+            if all(key.startswith(prefix) for key in state):
+                state = {
+                    key[len(prefix):]: value for key, value in state.items()
+                }
+                stripped = True
+    return state
+
+
 def is_distributed():
     return int(os.environ.get('WORLD_SIZE', '1')) > 1
 

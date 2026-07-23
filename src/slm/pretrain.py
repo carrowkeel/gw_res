@@ -22,7 +22,7 @@ from .config import load_config, to_dict
 from .model import GPT, build_config
 from .utils import (
     ensure_directory, get_local_rank, get_logger, get_world_size,
-    is_distributed, is_main_process, set_seed,
+    is_distributed, is_main_process, normalize_state_dict, set_seed,
 )
 
 logger = get_logger('pretrain')
@@ -112,7 +112,7 @@ def run(config, packed_directory=None, checkpoint_root=None):
         model = torch.compile(model)
     if is_distributed():
         model = DistributedDataParallel(model, device_ids=[get_local_rank()])
-        base_model = model.module
+        base_model = getattr(model.module, '_orig_mod', model.module)
 
     optimizer = base_model.configure_optimizers(
         pretrain_config.weight_decay,
@@ -140,7 +140,7 @@ def run(config, packed_directory=None, checkpoint_root=None):
     last_checkpoint = checkpoint_directory / 'ckpt_last.pt'
     if last_checkpoint.exists():
         saved = torch.load(last_checkpoint, map_location=device)
-        base_model.load_state_dict(saved['model'])
+        base_model.load_state_dict(normalize_state_dict(saved['model']))
         optimizer.load_state_dict(saved['optimizer'])
         start_step = saved['step'] + 1
         best_validation = saved.get('best_validation', best_validation)
