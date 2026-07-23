@@ -72,21 +72,36 @@ def _load_replay(paths, block_size):
     return PackedDataset(train_path, meta['dtype'], block_size)
 
 
-def _generate_decision(model, tokenizer, token_ids, simtrain_config,
-                       block_size, device):
+def _generate_decisions(model, tokenizer, games, simtrain_config,
+                        block_size, device):
+    """Generate every game's trader turn in one batched call.
+
+    Sequential per-game generation is prohibitively slow above pico scale,
+    since each token recomputes the full context. All contexts are cropped
+    to the batch's shortest (dropping the oldest tokens of longer games,
+    which the block-size crop was discarding from anyway) so a single
+    batched generate serves the whole lockstep quarter.
+    """
     import torch
 
-    context = token_ids[-(block_size - simtrain_config.max_decision_tokens):]
-    input_ids = torch.tensor([context], dtype=torch.long, device=device)
+    limit = block_size - simtrain_config.max_decision_tokens
+    contexts = [game['token_ids'][-limit:] for game in games]
+    shortest = min(len(context) for context in contexts)
+    contexts = [context[-shortest:] for context in contexts]
+    input_ids = torch.tensor(contexts, dtype=torch.long, device=device)
     output = model.generate(
         input_ids, simtrain_config.max_decision_tokens,
         temperature=simtrain_config.sample_temperature,
         top_p=simtrain_config.sample_top_p,
         eos_id=tokenizer.eos_id,
     )
-    generated = output[0, len(context):].tolist()
-    text = tokenizer.decode(generated)
-    return text.split('\n')[0].strip()
+    decisions = []
+    for row in output[:, shortest:].tolist():
+        if tokenizer.eos_id in row:
+            row = row[:row.index(tokenizer.eos_id)]
+        text = tokenizer.decode(row)
+        decisions.append(text.split('\n')[0].strip())
+    return decisions
 
 
 def _play_batch(model, tokenizer, config, llm_listener, step, block_size,
@@ -120,17 +135,17 @@ def _play_batch(model, tokenizer, config, llm_listener, step, block_size,
              'advisor_earnings': [], 'no_advisor_earnings': []}
     sample_turn = None
     for quarter in range(simtrain_config.quarters):
-        turns = []
         for game in games:
             block = render.render_quarter(
                 game['state'], game['market'], game['random']
             )
             prefix = ('\n' if quarter else '') + block
             game['token_ids'].extend(tokenizer.encode(prefix))
-            decision_text = _generate_decision(
-                model, tokenizer, game['token_ids'], simtrain_config,
-                block_size, device,
-            )
+        decisions = _generate_decisions(
+            model, tokenizer, games, simtrain_config, block_size, device,
+        )
+        turns = []
+        for game, decision_text in zip(games, decisions):
             decision_ids = tokenizer.encode(' ' + decision_text)
             span_start = len(game['token_ids'])
             game['token_ids'].extend(decision_ids)
