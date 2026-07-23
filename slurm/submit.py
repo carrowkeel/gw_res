@@ -520,6 +520,12 @@ def main():
         help='for a scale ladder, skip rungs already complete in the target '
              'run and finish only the incomplete ones; requires --run-id',
     )
+    parser.add_argument(
+        '--base-run',
+        help='stage-1 run tree the simtrain stage builds on (tokenizer, '
+             'pretrain checkpoint, packed replay data); overrides '
+             'simtrain.base_run_dir and is baked into the resolved config',
+    )
     arguments = parser.parse_args()
 
     if arguments.resume and not arguments.run_id:
@@ -527,6 +533,8 @@ def main():
 
     run_id = _resolve_run_id(arguments.run_id, arguments.dry_run)
     config = load_config(arguments.config, run_id=run_id)
+    if arguments.base_run:
+        config.simtrain.base_run_dir = arguments.base_run
     if arguments.resume and not config.scale.rungs:
         sys.exit(
             '--resume applies to scale ladders; for a single-config run, rerun '
@@ -546,6 +554,11 @@ def main():
     unknown = set(stages) - set(ALL_STAGES)
     if unknown:
         sys.exit('unknown stages: %s' % sorted(unknown))
+    if 'simtrain' in stages and not config.simtrain.base_run_dir:
+        sys.exit(
+            'simtrain needs a stage-1 base: pass --base-run '
+            'runs/<t1-run-tree> or set simtrain.base_run_dir in the config'
+        )
     submit(str(resolved_path), stages, arguments.dry_run)
 
 

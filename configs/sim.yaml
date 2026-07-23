@@ -4,7 +4,7 @@ project:
   seed: 1337
 
 simtrain:
-  base_run_dir: runs/t1_full-1bba019f
+  base_run_dir: null
   games_per_batch: 32
   quarters: 8
   field_count: 3

@@ -484,8 +484,12 @@ def main():
     )
     parser.add_argument('--config', required=True)
     parser.add_argument('--run-id', default=None)
+    parser.add_argument('--base-run', default=None)
     arguments = parser.parse_args()
-    run(load_config(arguments.config, run_id=arguments.run_id))
+    config = load_config(arguments.config, run_id=arguments.run_id)
+    if arguments.base_run:
+        config.simtrain.base_run_dir = arguments.base_run
+    run(config)
 
 
 if __name__ == '__main__':
