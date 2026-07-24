@@ -12,6 +12,20 @@ simtrain:
   maximum_steps: 150
   no_reason_action_probability: 0.5
   protocol_line: true
+  entry_threshold: 0.25
+  entry_probe_games: 16
+  exemplar_turn: true
+  no_signal_abort_steps: 25
+  curriculum:
+    - from_step: 0
+      field_count: 1
+      companies_per_field: 2
+    - from_step: 60
+      field_count: 2
+      companies_per_field: 2
+    - from_step: 120
+      field_count: 3
+      companies_per_field: 2
   learning_rate: 0.0001
   minimum_learning_rate: 0.00001
   warmup_steps: 50

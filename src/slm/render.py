@@ -101,18 +101,44 @@ PROTOCOL_MESSAGE = (
 )
 
 
-def render_quarter(state, market, random_generator, protocol_line=True):
+def render_exemplar_exchange(market, random_generator):
+    """Scripted example exchange shown once before the first quarter.
+
+    A base model imitates transcript patterns far more readily than it
+    follows instructions, so the order format appears once as an actual
+    trader turn before the model's first cue. The company rotates per
+    game, and the broker closes by saying nothing was traded, so the
+    exchange stays consistent with the opening state. Rendered context
+    only: trader spans never cover it, so it is never trained on.
+    """
+    company = random_generator.choice(market['companies'])
+    return '\n'.join([
+        '%s: Before the first quarter, one example exchange in the '
+        'required form.' % STATE_SPEAKER,
+        '%s: buy 2 shares of %s because %s is expected to be strong.' % (
+            MODEL_SPEAKER, company['name'], company['demand_factor'],
+        ),
+        '%s: That is the form. The example is over; nothing was '
+        'traded.' % STATE_SPEAKER,
+    ])
+
+
+def render_quarter(state, market, random_generator, protocol_line=True,
+                   exemplar_turn=False):
     """Render one quarter's context block, ending at the model's cue.
 
     Returns the block text whose last line is the trader label and colon,
     with no trailing newline, so the model's generation continues the line.
     The first quarter can carry a broker protocol message stating the
-    order format: in-context instruction for a cold-start model, never
-    training data.
+    order format and a scripted exemplar exchange demonstrating it:
+    in-context material for a cold-start model, never training data.
     """
     from .market import state_summary
 
-    lines = [render_state_message(state_summary(state), random_generator)]
+    lines = []
+    if exemplar_turn and state['quarter'] == 1:
+        lines.append(render_exemplar_exchange(market, random_generator))
+    lines.append(render_state_message(state_summary(state), random_generator))
     if protocol_line and state['quarter'] == 1:
         lines.append(PROTOCOL_MESSAGE)
     for report in state['reports']:

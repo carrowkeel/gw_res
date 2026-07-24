@@ -41,7 +41,7 @@ RUNG_STAGES = ['tokenizer', 'data', 'pretrain', 'finetune', 'evaluate']
 
 ALL_STAGES = [
     'generate', 'tokenizer', 'data', 'inspect', 'pretrain', 'sample',
-    'commsft', 'finetune', 'simtrain', 'evaluate',
+    'commsft', 'mathsft', 'gate', 'finetune', 'simtrain', 'evaluate',
     'graph_transform', 'graph_tokenizer', 'graph_data', 'graph_pretrain',
     'graph_evaluate',
 ]
@@ -49,8 +49,8 @@ DEFAULT_STAGES = [
     'generate', 'tokenizer', 'data', 'pretrain', 'finetune', 'evaluate',
 ]
 GPU_STAGES = {
-    'generate', 'pretrain', 'commsft', 'finetune', 'simtrain', 'evaluate',
-    'graph_pretrain', 'graph_evaluate',
+    'generate', 'pretrain', 'commsft', 'mathsft', 'gate', 'finetune',
+    'simtrain', 'evaluate', 'graph_pretrain', 'graph_evaluate',
 }
 
 CACHE_VARIABLES = [
@@ -554,10 +554,12 @@ def main():
     unknown = set(stages) - set(ALL_STAGES)
     if unknown:
         sys.exit('unknown stages: %s' % sorted(unknown))
-    if 'simtrain' in stages and not config.simtrain.base_run_dir:
+    needs_base = {'simtrain', 'gate'} & set(stages)
+    if needs_base and not config.simtrain.base_run_dir:
         sys.exit(
-            'simtrain needs a stage-1 base: pass --base-run '
-            'runs/<t1-run-tree> or set simtrain.base_run_dir in the config'
+            '%s needs a base run tree: pass --base-run runs/<t1-run-tree> '
+            'or set simtrain.base_run_dir in the config'
+            % ' and '.join(sorted(needs_base))
         )
     submit(str(resolved_path), stages, arguments.dry_run)
 

@@ -63,19 +63,29 @@ model's improvement on each capability is tracked on its own:
   questions, which the base model has no concept of (it continues dialogue
   as chitchat). Data: dialogues in the stage-1 name-and-colon turn format
   whose last turn answers a direct question from the conversation; loss on
-  the answer turn only; stage-1 replay against forgetting. Implemented in
-  commsft.py as the commsft stage.
+  the answer turn only; stage-1 replay against forgetting. A programmatic
+  groundedness filter rejects generated answers that fabricate particulars
+  (any number absent from the dialogue, low content overlap), because the
+  target skill is retrieval from context, not plausible invention.
+  Implemented in commsft.py as the commsft stage.
 - **Arithmetic SFT** teaches basic arithmetic (integer addition,
   subtraction, comparison in the sim's numeric range), same dialogue
   format, non-sim labels and subjects; generated programmatically with
-  exact ground truth.
+  exact ground truth. Implemented in mathsft.py as the mathsft stage,
+  starting from the communication checkpoint; its eval report breaks the
+  answered rate down by operation kind.
 
 Each stage generates its own data inside its own stage job, never into the
 stage-1 corpus or a global generation stage. After each stage the generic
 eval module (sfteval.py) scores held-out answers by similarity — token
 overlap and containment, never format — against both the source checkpoint
 and the trained one; the same instrument thresholds entry into the
-simulator.
+simulator. Forgetting and collapse are watched in both stages: a fixed
+stage-1 replay validation loss is measured before, during, and after
+training (upward drift is the forgetting warning), and the eval reports
+carry repetition warning metrics (distinct-prediction rate, repeated-bigram
+rate) so the loop signature that collapsed the sim pilots is visible here
+too.
 
 ### Stage 2 — simulation training (the main effort)
 
@@ -118,6 +128,13 @@ Design constraints carried into implementation:
   constructed so that ignoring the reports has near-zero expected return
   (no exploitable price-only patterns). Otherwise the model can learn to
   trade without reading, and stage 2 stops training language comprehension.
+- Traction requires being slightly better than random from the start: a
+  model no better than a blind actor gives the outcome weighting nothing
+  but luck to amplify. The entry difficulty is therefore simplified (fewer
+  independent and dependent variables) and difficulty is scaled online
+  through simtrain.curriculum — per-step field and company counts, free of
+  cost because every step samples fresh markets. The entry gate probes at
+  the entry difficulty.
 - Source labels are part of the message format from the first design, even
   while all sources are still reliable — adding labels later would be a
   format break. Reliability variation arrives as curriculum.
@@ -160,6 +177,21 @@ loss operator already in use; no policy-gradient RL. A replay fraction of
 stage-1 text in every batch anchors language at the gradient level, while
 the listener's language-quality score covers it behaviorally.
 
+The weighting withholds imitation rather than merely modulating it, the
+lesson of the first pilots (weights centered at one imitated every turn
+at full strength, and uniform self-imitation of chatter collapsed the
+model). Only turns that executed a trade carry loss, their quarter
+earnings are normalized across the batch's acted turns, and the weight is
+max(0, exp(z) - 1): neutral- and negative-advantage turns contribute
+nothing. A batch with no actionable signal updates nothing at all — if a
+model does nothing in the simulator, its parameters do not change — and a
+configured streak of such steps aborts the run (no_signal_abort_steps)
+instead of burning GPU hours. The first quarter carries a scripted
+exemplar exchange (a trader-labeled order in the transcript, closed by
+the broker with nothing traded), because a base model imitates transcript
+patterns far more readily than it follows instructions; it is rendered
+context, never trained on.
+
 **Compute topology.** One training GPU plus roughly 2-4 LLM GPUs
 (listener + rendering) behind an asynchronous buffer, so training never
 blocks on generation. Measured basis: training consumes about 30k
@@ -171,8 +203,14 @@ allocation is a reallocation, not new cost.
 
 **Stage 1 to 2 link.** Vocabulary subset by design (above); replay of
 stage-1 data into stage-2 batches (machinery already built in finetune.py
-as replay_fraction); the capability threshold implemented as a stopping
-mechanism with its measure decided from pilot runs.
+as replay_fraction); and the entry gate (gate.py), which measures the
+genuine actionable rate — the fraction of trader turns the pattern parser
+can act on from the raw text alone, with no reason gate and no charitable
+rewriting. The simulator probes the base checkpoint before its first step
+and refuses to start below simtrain.entry_threshold; the same probe runs
+standalone (the gate stage) to measure where any checkpoint stands. The
+simulator builds on the furthest bridging stage the base run completed
+(mathsft, then commsft, then pretrain).
 
 ### Stage 3 — real problems (later)
 

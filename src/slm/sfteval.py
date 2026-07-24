@@ -48,6 +48,15 @@ def token_f1(prediction, reference):
     return 2 * precision * recall / (precision + recall)
 
 
+def repeated_bigram_rate(text):
+    """Fraction of repeated bigrams inside one text: the loop signature."""
+    tokens = normalize_tokens(text)
+    if len(tokens) < 3:
+        return 0.0
+    bigrams = list(zip(tokens, tokens[1:]))
+    return 1.0 - len(set(bigrams)) / len(bigrams)
+
+
 def score_answer(prediction, reference, threshold):
     """Return (f1, answered): similar enough by overlap or by containment."""
     f1 = token_f1(prediction, reference)
@@ -98,6 +107,7 @@ def evaluate_model(model, tokenizer, records, sfteval_config, block_size,
         f1_total += f1
         rows.append({
             'question': record.get('question'),
+            'kind': record.get('kind'),
             'reference': record['response'],
             'prediction': prediction,
             'f1': round(f1, 3),
@@ -111,6 +121,32 @@ def evaluate_model(model, tokenizer, records, sfteval_config, block_size,
         'mean_f1': round(f1_total / len(records), 4) if records else 0.0,
         'similarity_threshold': sfteval_config.similarity_threshold,
     }
+    if rows:
+        predictions = [row['prediction'] for row in rows]
+        report['distinct_prediction_rate'] = round(
+            len(set(predictions)) / len(predictions), 4
+        )
+        report['repeated_bigram_rate'] = round(
+            sum(repeated_bigram_rate(text) for text in predictions)
+            / len(predictions), 4
+        )
+    kinds = {}
+    for row in rows:
+        if row['kind'] is None:
+            continue
+        entry = kinds.setdefault(row['kind'], [0, 0, 0.0])
+        entry[0] += 1
+        entry[1] += int(row['answered'])
+        entry[2] += row['f1']
+    if kinds:
+        report['by_kind'] = {
+            kind: {
+                'examples': count,
+                'answered_rate': round(answered / count, 4),
+                'mean_f1': round(f1_sum / count, 4),
+            }
+            for kind, (count, answered, f1_sum) in sorted(kinds.items())
+        }
     return report, rows
 
 
@@ -148,8 +184,11 @@ def evaluate_checkpoint(config, checkpoint_path, records, output_path,
         for row in rows[:config.sfteval.sample_dump]:
             handle.write(json.dumps(row, ensure_ascii=False) + '\n')
     logger.info(
-        '%s: answered %.3f, mean f1 %.3f over %d examples -> %s',
+        '%s: answered %.3f, mean f1 %.3f, distinct %.3f, repeated bigrams '
+        '%.3f over %d examples -> %s',
         label, report['answered_rate'], report['mean_f1'],
+        report.get('distinct_prediction_rate', 0.0),
+        report.get('repeated_bigram_rate', 0.0),
         report['examples'], output_path,
     )
     del model

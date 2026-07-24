@@ -42,12 +42,14 @@ logger = get_logger('simtrain')
 
 
 def _base_paths(config):
+    from .sftstage import resolve_base_checkpoint
+
     simtrain_config = config.simtrain
     if simtrain_config.base_run_dir:
         base = Path(simtrain_config.base_run_dir)
         return {
             'tokenizer': base / 'tokenizer' / 'tokenizer.json',
-            'checkpoint': base / 'checkpoints' / 'pretrain' / 'ckpt_best.pt',
+            'checkpoint': resolve_base_checkpoint(base),
             'packed': base / 'data' / 'packed',
         }
     return {
@@ -104,6 +106,26 @@ def _generate_decisions(model, tokenizer, games, simtrain_config,
     return decisions
 
 
+def _difficulty_at(simtrain_config, step):
+    """Return (field_count, companies_per_field) for a step.
+
+    The curriculum is a list of rungs ({from_step, field_count,
+    companies_per_field}); the last rung whose from_step has been reached
+    wins, and the base config values apply before any rung. Because every
+    step samples fresh markets, difficulty scales online with no cost.
+    """
+    field_count = simtrain_config.field_count
+    companies_per_field = simtrain_config.companies_per_field
+    for rung in sorted(simtrain_config.curriculum,
+                       key=lambda rung: rung.get('from_step', 0)):
+        if step >= rung.get('from_step', 0):
+            field_count = rung.get('field_count', field_count)
+            companies_per_field = rung.get(
+                'companies_per_field', companies_per_field
+            )
+    return field_count, companies_per_field
+
+
 def _play_batch(model, tokenizer, config, llm_listener, step, block_size,
                 device):
     """Play games_per_batch games in lockstep; return games and turn stats.
@@ -112,14 +134,14 @@ def _play_batch(model, tokenizer, config, llm_listener, step, block_size,
     listener can interpret every game's turn in one batched call.
     """
     simtrain_config = config.simtrain
+    field_count, companies_per_field = _difficulty_at(simtrain_config, step)
     games = []
     for game_index in range(simtrain_config.games_per_batch):
         game_random = random.Random(
             config.project.seed + step * 100003 + game_index
         )
         game_market = market.sample_market(
-            game_random, simtrain_config.field_count,
-            simtrain_config.companies_per_field,
+            game_random, field_count, companies_per_field,
         )
         games.append({
             'random': game_random,
@@ -128,6 +150,7 @@ def _play_batch(model, tokenizer, config, llm_listener, step, block_size,
             'token_ids': [tokenizer.bos_id],
             'spans': [],
             'earnings': [],
+            'acted': [],
             'turn_records': [],
         })
     stats = {'turns': 0, 'no_reason': 0, 'acted': 0,
@@ -141,6 +164,7 @@ def _play_batch(model, tokenizer, config, llm_listener, step, block_size,
             block = render.render_quarter(
                 game['state'], game['market'], game['random'],
                 protocol_line=simtrain_config.protocol_line,
+                exemplar_turn=simtrain_config.exemplar_turn,
             )
             prefix = ('\n' if quarter else '') + block
             game['token_ids'].extend(tokenizer.encode(prefix))
@@ -190,6 +214,7 @@ def _play_batch(model, tokenizer, config, llm_listener, step, block_size,
                 game['random'],
             )
             game['earnings'].append(earnings)
+            game['acted'].append(bool(executed))
             if advisor_present:
                 stats['advisor_earnings'].append(earnings)
             else:
@@ -210,16 +235,24 @@ def _play_batch(model, tokenizer, config, llm_listener, step, block_size,
 def _batch_tensors(games, simtrain_config, block_size, device):
     """Turn played games into padded input, target, and weight tensors.
 
-    Quarter earnings are normalized across the entire batch and mapped
-    through a clipped exponential into per-quarter weights; only trader
-    turn tokens carry weight, so the loss trains behavior while the
-    rendered context is read but never imitated.
+    Only turns that executed an action carry loss. Their quarter earnings
+    are normalized across the batch's acted turns and mapped through
+    max(0, exp(z) - 1), so a neutral- or negative-advantage turn
+    contributes nothing at all: the loss imitates only decisions that
+    scored above the batch, never chatter and never inaction. This is the
+    correction to the first pilots, where weights centered at one imitated
+    every turn at full strength and self-imitation of chatter collapsed
+    the model.
     """
     import torch
 
-    all_earnings = [value for game in games for value in game['earnings']]
-    mean = statistics.mean(all_earnings)
-    spread = statistics.pstdev(all_earnings)
+    acted_earnings = [
+        earnings for game in games
+        for earnings, acted in zip(game['earnings'], game['acted'])
+        if acted
+    ]
+    mean = statistics.mean(acted_earnings)
+    spread = statistics.pstdev(acted_earnings)
     spread = spread if spread > 1e-6 else 1.0
     rows = []
     for game in games:
@@ -227,13 +260,17 @@ def _batch_tensors(games, simtrain_config, block_size, device):
         offset = max(0, len(token_ids) - (block_size + 1))
         token_ids = token_ids[offset:]
         weights = [0.0] * (len(token_ids) - 1)
-        for (span_start, span_end), earnings in zip(
-                game['spans'], game['earnings']):
+        for (span_start, span_end), earnings, acted in zip(
+                game['spans'], game['earnings'], game['acted']):
+            if not acted:
+                continue
             normalized = (earnings - mean) / spread
             weight = math.exp(
                 normalized / simtrain_config.weight_temperature
             )
-            weight = min(weight, simtrain_config.weight_clip)
+            weight = max(0.0, min(weight, simtrain_config.weight_clip) - 1.0)
+            if weight <= 0.0:
+                continue
             for position in range(span_start - offset - 1,
                                   span_end - offset - 1):
                 if 0 <= position < len(weights):
@@ -248,23 +285,21 @@ def _batch_tensors(games, simtrain_config, block_size, device):
         inputs[row_index, :length] = torch.tensor(token_ids[:-1])
         targets[row_index, :length] = torch.tensor(token_ids[1:])
         weight_tensor[row_index, :length] = torch.tensor(weights)
-    total = weight_tensor.sum()
-    if total > 0:
-        weight_tensor = weight_tensor * (
-            (weight_tensor > 0).sum() / total
-        )
     return (inputs.to(device), targets.to(device), weight_tensor.to(device))
 
 
-def _reference_returns(simtrain_config, seed, sample_games=200):
+def _reference_returns(simtrain_config, seed, field_count,
+                       companies_per_field, sample_games=200):
     blind = statistics.mean(
         market.play_game(market.blind_policy, seed + index,
-                         simtrain_config.quarters)[0]
+                         simtrain_config.quarters, field_count,
+                         companies_per_field)[0]
         for index in range(sample_games)
     )
     oracle = statistics.mean(
         market.play_game(market.oracle_policy, seed + index,
-                         simtrain_config.quarters)[0]
+                         simtrain_config.quarters, field_count,
+                         companies_per_field)[0]
         for index in range(sample_games)
     )
     return blind, oracle
@@ -301,6 +336,28 @@ def run(config):
     logger.info('model: %.2fM parameters, block size %d',
                 model.count_parameters() / 1e6, block_size)
 
+    checkpoint_directory = ensure_directory(config.simtrain_dir)
+    if (simtrain_config.entry_threshold > 0
+            and not (checkpoint_directory / 'ckpt_last.pt').exists()):
+        from . import gate as gate_module
+
+        gate_report = gate_module.probe(
+            model, tokenizer, config, block_size, device
+        )
+        gate_module.write_report(
+            gate_report, checkpoint_directory / 'gate_report.json'
+        )
+        if not gate_report['passes']:
+            raise SystemExit(
+                'entry gate: actionable rate %.3f is below threshold %.2f; '
+                'the base model is not ready for simulation training (see '
+                'gate_report.json; train the bridging stages further or '
+                'lower simtrain.entry_threshold deliberately)' % (
+                    gate_report['actionable_rate'],
+                    simtrain_config.entry_threshold,
+                )
+            )
+
     replay = None
     if simtrain_config.replay_fraction > 0:
         replay = _load_replay(paths, block_size)
@@ -333,7 +390,6 @@ def run(config):
         (simtrain_config.beta1, simtrain_config.beta2), device_type,
     )
 
-    checkpoint_directory = ensure_directory(config.simtrain_dir)
     start_step = 0
     last_checkpoint = checkpoint_directory / 'ckpt_last.pt'
     if last_checkpoint.exists():
@@ -343,11 +399,23 @@ def run(config):
         start_step = saved['step'] + 1
         logger.info('resumed from step %d', start_step)
 
-    blind_reference, oracle_reference = _reference_returns(
-        simtrain_config, config.project.seed + 999983
-    )
-    logger.info('reference returns per game: blind %+.1f, oracle %+.1f',
-                blind_reference, oracle_reference)
+    reference_cache = {}
+
+    def references_for(field_count, companies_per_field):
+        key = (field_count, companies_per_field)
+        if key not in reference_cache:
+            reference_cache[key] = _reference_returns(
+                simtrain_config, config.project.seed + 999983,
+                field_count, companies_per_field,
+            )
+            logger.info(
+                'references at %d fields x %d companies: blind %+.1f, '
+                'oracle %+.1f', field_count, companies_per_field,
+                reference_cache[key][0], reference_cache[key][1],
+            )
+        return reference_cache[key]
+
+    references_for(*_difficulty_at(simtrain_config, start_step))
 
     def save_checkpoint(step, tag, mean_return):
         payload = {
@@ -366,11 +434,18 @@ def run(config):
 
     recent_returns = []
     best_rolling = -float('inf')
+    no_signal_streak = 0
     interval_start = time.time()
     for step in range(start_step, simtrain_config.maximum_steps):
         current_learning_rate = learning_rate_at(step, simtrain_config)
         for group in optimizer.param_groups:
             group['lr'] = current_learning_rate
+        field_count, companies_per_field = _difficulty_at(
+            simtrain_config, step
+        )
+        blind_reference, oracle_reference = references_for(
+            field_count, companies_per_field
+        )
 
         model.eval()
         games, stats, sample_turn = _play_batch(
@@ -378,51 +453,74 @@ def run(config):
         )
         model.train()
 
-        all_earnings = [
-            value for game in games for value in game['earnings']
+        acted_earnings = [
+            earnings for game in games
+            for earnings, acted in zip(game['earnings'], game['acted'])
+            if acted
         ]
-        flat_signal = statistics.pstdev(all_earnings) < 1e-6
+        no_signal = (
+            len(acted_earnings) < 2
+            or statistics.pstdev(acted_earnings) < 1e-6
+        )
         update_started = time.time()
-        optimizer.zero_grad(set_to_none=True)
         game_loss = None
         replay_loss = None
         loss = None
         weights = None
-        with autocast:
-            if not flat_signal:
+        if not no_signal:
+            optimizer.zero_grad(set_to_none=True)
+            with autocast:
                 inputs, targets, weights = _batch_tensors(
                     games, simtrain_config, block_size, device
                 )
-                logits, _ = model(inputs, targets)
-                per_token = functional.cross_entropy(
-                    logits.view(-1, logits.size(-1)), targets.view(-1),
-                    reduction='none',
-                ).view_as(weights)
-                game_loss = (per_token * weights).sum() / weights.sum().clamp(
-                    min=1.0
-                )
-                loss = game_loss
-            if replay is not None:
-                replay_inputs, replay_targets = replay.get_batch(
-                    max(1, int(simtrain_config.games_per_batch
-                               * simtrain_config.replay_fraction)),
-                    device, replay_random,
-                )
-                _, replay_loss = model(replay_inputs, replay_targets)
-                if loss is None:
-                    loss = replay_loss
-                else:
-                    loss = (
-                        (1.0 - simtrain_config.replay_fraction) * game_loss
-                        + simtrain_config.replay_fraction * replay_loss
+                if weights.sum() > 0:
+                    logits, _ = model(inputs, targets)
+                    per_token = functional.cross_entropy(
+                        logits.view(-1, logits.size(-1)), targets.view(-1),
+                        reduction='none',
+                    ).view_as(weights)
+                    game_loss = (
+                        (per_token * weights).sum() / weights.sum()
                     )
-        if loss is not None:
-            loss.backward()
-            if simtrain_config.gradient_clip > 0:
-                torch.nn.utils.clip_grad_norm_(
-                    base_model.parameters(), simtrain_config.gradient_clip
+                    loss = game_loss
+                    if replay is not None:
+                        replay_inputs, replay_targets = replay.get_batch(
+                            max(1, int(simtrain_config.games_per_batch
+                                       * simtrain_config.replay_fraction)),
+                            device, replay_random,
+                        )
+                        _, replay_loss = model(
+                            replay_inputs, replay_targets
+                        )
+                        loss = (
+                            (1.0 - simtrain_config.replay_fraction)
+                            * game_loss
+                            + simtrain_config.replay_fraction * replay_loss
+                        )
+                else:
+                    no_signal = True
+            if loss is not None:
+                loss.backward()
+                if simtrain_config.gradient_clip > 0:
+                    torch.nn.utils.clip_grad_norm_(
+                        base_model.parameters(),
+                        simtrain_config.gradient_clip
+                    )
+                optimizer.step()
+        if no_signal:
+            no_signal_streak += 1
+            if (simtrain_config.no_signal_abort_steps > 0
+                    and no_signal_streak
+                    >= simtrain_config.no_signal_abort_steps):
+                raise SystemExit(
+                    'aborting: %d consecutive steps without actionable '
+                    'signal (no executed trades with earnings variance); '
+                    'the model is not engaging the market — check '
+                    'gate_report.json, the bridging stages, and the entry '
+                    'difficulty before rerunning' % no_signal_streak
                 )
-            optimizer.step()
+        else:
+            no_signal_streak = 0
         update_seconds = time.time() - update_started
 
         mean_return = statistics.mean(
@@ -435,7 +533,10 @@ def run(config):
 
         row = {
             'step': step,
-            'flat_signal': flat_signal,
+            'field_count': field_count,
+            'companies_per_field': companies_per_field,
+            'no_signal': no_signal,
+            'updated': not no_signal,
             'mean_return': round(mean_return, 2),
             'rolling_return': round(rolling, 2),
             'no_reason_rate': round(stats['no_reason'] / stats['turns'], 3),
@@ -491,7 +592,8 @@ def run(config):
                 '%.3f' % game_loss.item() if game_loss is not None else '-',
                 '%.3f' % replay_loss.item() if replay_loss is not None
                 else '-',
-                '  FLAT-SIGNAL (replay-only update)' if flat_signal else '',
+                '  NO-SIGNAL (no update, streak %d)' % no_signal_streak
+                if no_signal else '',
                 mean_return, rolling, blind_reference, oracle_reference,
                 stats['no_reason'] / stats['turns'],
                 stats['acted'] / stats['turns'],

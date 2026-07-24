@@ -29,6 +29,40 @@ from .utils import ensure_directory, get_logger, set_seed
 
 logger = get_logger('commsft')
 
+NUMBER_WORDS = {
+    'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine',
+    'ten', 'eleven', 'twelve', 'thirteen', 'fourteen', 'fifteen', 'sixteen',
+    'seventeen', 'eighteen', 'nineteen', 'twenty', 'thirty', 'forty',
+    'fifty', 'sixty', 'seventy', 'eighty', 'ninety', 'hundred', 'thousand',
+    'dozen', 'first', 'second', 'third', 'fourth', 'fifth', 'sixth',
+    'seventh', 'eighth', 'ninth', 'tenth',
+}
+
+
+def grounded(record, minimum_overlap):
+    """Reject answers that introduce content absent from the dialogue.
+
+    The generator, asked to answer from the conversation, still fabricates
+    plausible particulars (a novel place name, an hours-per-unit figure)
+    in a substantial share of dialogues, and training on those teaches
+    invention instead of retrieval. Fabrication is objectively detectable:
+    every number in the answer (digits or words) must appear in the
+    dialogue, and the answer's content words must mostly come from it.
+    """
+    prompt_tokens = set(sfteval.normalize_tokens(record['prompt']))
+    content = [
+        token for token in sfteval.normalize_tokens(record['response'])
+        if len(token) > 3 or token.isdigit() or token in NUMBER_WORDS
+    ]
+    if not content:
+        return False
+    for token in content:
+        if ((token.isdigit() or token in NUMBER_WORDS)
+                and token not in prompt_tokens):
+            return False
+    matched = sum(token in prompt_tokens for token in content)
+    return matched / len(content) >= minimum_overlap
+
 
 def _records_path(config):
     return config.commsft_data_dir / 'commsft.jsonl'
@@ -64,6 +98,16 @@ def generate_dialogues(config):
     target = commsft_config.number_of_dialogues
     output_path = _records_path(config)
     records, seen = _scan_records(output_path)
+    scanned = len(records)
+    records = [
+        record for record in records
+        if grounded(record, commsft_config.minimum_grounding)
+    ]
+    if scanned > len(records):
+        logger.info(
+            'dropped %d ungrounded dialogues of %d on disk; topping up',
+            scanned - len(records), scanned,
+        )
     if len(records) >= target:
         logger.info('dialogue pool already complete (%d)', len(records))
         return records
@@ -77,7 +121,7 @@ def generate_dialogues(config):
     example_turns = prompts.qa_dialogue_example_turns()
     kept = len(records)
     attempts = 0
-    maximum_attempts = (target - kept) * 4 + generate_config.batch_size
+    maximum_attempts = (target - kept) * 8 + generate_config.batch_size
     with open(output_path, 'a') as handle:
         while kept < target and attempts < maximum_attempts:
             size = min(generate_config.batch_size, (target - kept) * 2 + 1)
@@ -98,6 +142,8 @@ def generate_dialogues(config):
                 if record is None:
                     continue
                 if generate_config.apply_filter and not filters.passes(text):
+                    continue
+                if not grounded(record, commsft_config.minimum_grounding):
                     continue
                 fingerprint = _normalized_hash(
                     record['prompt'] + record['response']

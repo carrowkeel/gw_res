@@ -136,6 +136,29 @@ class CommSftConfig:
     number_of_dialogues: int = 20000
     holdout_fraction: float = 0.02
     minimum_turns: int = 5
+    minimum_grounding: float = 0.6
+    batch_size: int = 16
+    gradient_accumulation_steps: int = 2
+    epochs: int = 2
+    maximum_steps: int = None
+    learning_rate: float = 3e-5
+    minimum_learning_rate: float = 3e-6
+    warmup_ratio: float = 0.03
+    weight_decay: float = 0.0
+    gradient_clip: float = 1.0
+    dtype: str = 'bfloat16'
+    compile_model: bool = False
+    log_interval: int = 20
+    evaluation_interval: int = 200
+    maximum_sequence_length: int = 1024
+    replay_fraction: float = 0.2
+
+
+@dataclass
+class MathSftConfig:
+    number_of_dialogues: int = 20000
+    holdout_fraction: float = 0.02
+    maximum_value: int = 1000
     batch_size: int = 16
     gradient_accumulation_steps: int = 2
     epochs: int = 2
@@ -191,6 +214,11 @@ class SimTrainConfig:
     listener_model: str = None
     no_reason_action_probability: float = 0.5
     protocol_line: bool = True
+    entry_threshold: float = 0.25
+    entry_probe_games: int = 16
+    curriculum: list = field(default_factory=list)
+    exemplar_turn: bool = True
+    no_signal_abort_steps: int = 25
     render_mode: str = 'template'
     log_interval: int = 10
     checkpoint_interval: int = 100
@@ -258,6 +286,7 @@ class Config:
     pretrain: PretrainConfig = field(default_factory=PretrainConfig)
     finetune: FinetuneConfig = field(default_factory=FinetuneConfig)
     commsft: CommSftConfig = field(default_factory=CommSftConfig)
+    mathsft: MathSftConfig = field(default_factory=MathSftConfig)
     sfteval: SftEvalConfig = field(default_factory=SftEvalConfig)
     simtrain: SimTrainConfig = field(default_factory=SimTrainConfig)
     eval: EvalConfig = field(default_factory=EvalConfig)
@@ -304,6 +333,14 @@ class Config:
         return self.out_dir / 'checkpoints' / 'commsft'
 
     @property
+    def mathsft_data_dir(self):
+        return self.data_dir / 'mathsft'
+
+    @property
+    def mathsft_dir(self):
+        return self.out_dir / 'checkpoints' / 'mathsft'
+
+    @property
     def simtrain_dir(self):
         return self.out_dir / 'checkpoints' / 'simtrain'
 
@@ -336,6 +373,7 @@ _SECTION_TYPES = {
     'pretrain': PretrainConfig,
     'finetune': FinetuneConfig,
     'commsft': CommSftConfig,
+    'mathsft': MathSftConfig,
     'sfteval': SftEvalConfig,
     'simtrain': SimTrainConfig,
     'eval': EvalConfig,

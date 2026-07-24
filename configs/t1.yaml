@@ -58,6 +58,21 @@ commsft:
   number_of_dialogues: 2000
   holdout_fraction: 0.05
   minimum_turns: 5
+  minimum_grounding: 0.6
+  batch_size: 16
+  gradient_accumulation_steps: 2
+  epochs: 2
+  learning_rate: 0.00003
+  minimum_learning_rate: 0.000003
+  warmup_ratio: 0.03
+  replay_fraction: 0.2
+  evaluation_interval: 50
+  log_interval: 20
+
+mathsft:
+  number_of_dialogues: 4000
+  holdout_fraction: 0.05
+  maximum_value: 1000
   batch_size: 16
   gradient_accumulation_steps: 2
   epochs: 2

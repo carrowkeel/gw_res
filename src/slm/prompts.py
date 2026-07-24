@@ -402,11 +402,14 @@ def build_qa_dialogue_prompt(random_generator):
         'subject of your choosing from %s, in %s. The speakers should state '
         'concrete particulars along the way: names, numbers, places, times, '
         'or decisions. The second-to-last turn must be one speaker asking a '
-        'single direct question starting with the word %s, about something '
-        'stated earlier in the conversation. The last turn must be a '
-        'different speaker answering that question correctly in one or two '
-        'sentences, using only what was said. Give each speaker a name and '
-        'begin every turn with the name and a colon.' % (
+        'single direct question starting with the word %s, about a '
+        'particular already stated earlier in the conversation, never about '
+        'plans, opinions, or anything not yet said. The last turn must be a '
+        'different speaker answering that question in one or two sentences '
+        'that restate the particulars exactly as they were given, adding no '
+        'name, number, or fact that does not appear earlier in the '
+        'conversation. Give each speaker a name and begin every turn with '
+        'the name and a colon.' % (
             minimum_turns, speaker_count,
             random_generator.choice(seeds.SUBJECT_DOMAINS),
             _toned(random_generator.choice(seeds.TONES)),
@@ -473,10 +476,14 @@ def parse_qa_dialogue(text, minimum_turns):
     prompt = '\n'.join(
         '%s: %s' % (speaker, turn) for speaker, turn in turns[:-1]
     )
+    question_sentences = re.findall(r'[^.!?]*\?', question)
     return {
         'prompt': '%s\n%s:' % (prompt, answer_speaker),
         'response': answer,
-        'question': question,
+        'question': (
+            question_sentences[-1].strip() if question_sentences
+            else question
+        ),
     }
 
 
