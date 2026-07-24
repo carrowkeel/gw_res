@@ -476,14 +476,16 @@ def parse_qa_dialogue(text, minimum_turns):
     prompt = '\n'.join(
         '%s: %s' % (speaker, turn) for speaker, turn in turns[:-1]
     )
+    question_text = question
     question_sentences = re.findall(r'[^.!?]*\?', question)
+    if question_sentences:
+        candidate = question_sentences[-1].strip()
+        if len(candidate.split()) >= 3:
+            question_text = candidate
     return {
         'prompt': '%s\n%s:' % (prompt, answer_speaker),
         'response': answer,
-        'question': (
-            question_sentences[-1].strip() if question_sentences
-            else question
-        ),
+        'question': question_text,
     }
 
 

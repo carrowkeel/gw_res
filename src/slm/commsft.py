@@ -39,29 +39,77 @@ NUMBER_WORDS = {
 }
 
 
+_UNICODE_PUNCTUATION = str.maketrans({
+    '\u2019': "'", '\u2018': "'", '\u201c': '"', '\u201d': '"',
+    '\u2014': '-', '\u2013': '-', '\u2026': '...', '\u00a0': ' ',
+})
+
+
+def _numeric(token):
+    return any(character.isdigit() for character in token) \
+        or token in NUMBER_WORDS
+
+
 def grounded(record, minimum_overlap):
     """Reject answers that introduce content absent from the dialogue.
 
     The generator, asked to answer from the conversation, still fabricates
-    plausible particulars (a novel place name, an hours-per-unit figure)
-    in a substantial share of dialogues, and training on those teaches
+    plausible particulars (a novel place name, a date like April 18th) in
+    a substantial share of dialogues, and training on those teaches
     invention instead of retrieval. Fabrication is objectively detectable:
-    every number in the answer (digits or words) must appear in the
-    dialogue, and the answer's content words must mostly come from it.
+    every numeric token in the answer (anything containing a digit, or a
+    number word) must appear in the dialogue, and the answer's content
+    words must mostly come from it.
     """
     prompt_tokens = set(sfteval.normalize_tokens(record['prompt']))
     content = [
         token for token in sfteval.normalize_tokens(record['response'])
-        if len(token) > 3 or token.isdigit() or token in NUMBER_WORDS
+        if len(token) > 3 or _numeric(token)
     ]
     if not content:
         return False
     for token in content:
-        if ((token.isdigit() or token in NUMBER_WORDS)
-                and token not in prompt_tokens):
+        if _numeric(token) and token not in prompt_tokens:
             return False
     matched = sum(token in prompt_tokens for token in content)
     return matched / len(content) >= minimum_overlap
+
+
+def copies_earlier_turn(record):
+    """True when the answer is a verbatim copy of a whole earlier turn.
+
+    An answer that repeats an entire prior turn is maximally grounded and
+    usually wrong: it is the generator dodging the question with a line
+    that was already said, the degenerate case the overlap measure alone
+    rewards.
+    """
+    response_normalized = ' '.join(
+        sfteval.normalize_tokens(record['response'])
+    )
+    for line in record['prompt'].split('\n')[:-1]:
+        _, _, turn_text = line.partition(':')
+        if turn_text.strip() and ' '.join(
+                sfteval.normalize_tokens(turn_text)) == response_normalized:
+            return True
+    return False
+
+
+def acceptable_text(text):
+    """True when the text is ASCII after mapping typographic punctuation.
+
+    Curly quotes and dashes are legitimate generator output; anything
+    beyond them (stray CJK, mojibake) is contamination this stage's data
+    should not carry.
+    """
+    return text.translate(_UNICODE_PUNCTUATION).isascii()
+
+
+def usable(record, minimum_overlap):
+    return (
+        acceptable_text(record['prompt'] + record['response'])
+        and grounded(record, minimum_overlap)
+        and not copies_earlier_turn(record)
+    )
 
 
 def _records_path(config):
@@ -101,11 +149,11 @@ def generate_dialogues(config):
     scanned = len(records)
     records = [
         record for record in records
-        if grounded(record, commsft_config.minimum_grounding)
+        if usable(record, commsft_config.minimum_grounding)
     ]
     if scanned > len(records):
         logger.info(
-            'dropped %d ungrounded dialogues of %d on disk; topping up',
+            'dropped %d unusable dialogues of %d on disk; topping up',
             scanned - len(records), scanned,
         )
     if len(records) >= target:
@@ -143,7 +191,7 @@ def generate_dialogues(config):
                     continue
                 if generate_config.apply_filter and not filters.passes(text):
                     continue
-                if not grounded(record, commsft_config.minimum_grounding):
+                if not usable(record, commsft_config.minimum_grounding):
                     continue
                 fingerprint = _normalized_hash(
                     record['prompt'] + record['response']
