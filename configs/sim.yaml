@@ -14,6 +14,8 @@ simtrain:
   protocol_line: true
   entry_threshold: 0.25
   entry_probe_games: 16
+  exemplar_turn: true
+  no_signal_abort_steps: 25
   curriculum:
     - from_step: 0
       field_count: 1

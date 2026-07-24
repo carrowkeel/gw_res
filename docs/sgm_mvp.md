@@ -177,6 +177,21 @@ loss operator already in use; no policy-gradient RL. A replay fraction of
 stage-1 text in every batch anchors language at the gradient level, while
 the listener's language-quality score covers it behaviorally.
 
+The weighting withholds imitation rather than merely modulating it, the
+lesson of the first pilots (weights centered at one imitated every turn
+at full strength, and uniform self-imitation of chatter collapsed the
+model). Only turns that executed a trade carry loss, their quarter
+earnings are normalized across the batch's acted turns, and the weight is
+max(0, exp(z) - 1): neutral- and negative-advantage turns contribute
+nothing. A batch with no actionable signal updates nothing at all — if a
+model does nothing in the simulator, its parameters do not change — and a
+configured streak of such steps aborts the run (no_signal_abort_steps)
+instead of burning GPU hours. The first quarter carries a scripted
+exemplar exchange (a trader-labeled order in the transcript, closed by
+the broker with nothing traded), because a base model imitates transcript
+patterns far more readily than it follows instructions; it is rendered
+context, never trained on.
+
 **Compute topology.** One training GPU plus roughly 2-4 LLM GPUs
 (listener + rendering) behind an asynchronous buffer, so training never
 blocks on generation. Measured basis: training consumes about 30k

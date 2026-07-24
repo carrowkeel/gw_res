@@ -150,6 +150,7 @@ def _play_batch(model, tokenizer, config, llm_listener, step, block_size,
             'token_ids': [tokenizer.bos_id],
             'spans': [],
             'earnings': [],
+            'acted': [],
             'turn_records': [],
         })
     stats = {'turns': 0, 'no_reason': 0, 'acted': 0,
@@ -163,6 +164,7 @@ def _play_batch(model, tokenizer, config, llm_listener, step, block_size,
             block = render.render_quarter(
                 game['state'], game['market'], game['random'],
                 protocol_line=simtrain_config.protocol_line,
+                exemplar_turn=simtrain_config.exemplar_turn,
             )
             prefix = ('\n' if quarter else '') + block
             game['token_ids'].extend(tokenizer.encode(prefix))
@@ -212,6 +214,7 @@ def _play_batch(model, tokenizer, config, llm_listener, step, block_size,
                 game['random'],
             )
             game['earnings'].append(earnings)
+            game['acted'].append(bool(executed))
             if advisor_present:
                 stats['advisor_earnings'].append(earnings)
             else:
@@ -232,16 +235,24 @@ def _play_batch(model, tokenizer, config, llm_listener, step, block_size,
 def _batch_tensors(games, simtrain_config, block_size, device):
     """Turn played games into padded input, target, and weight tensors.
 
-    Quarter earnings are normalized across the entire batch and mapped
-    through a clipped exponential into per-quarter weights; only trader
-    turn tokens carry weight, so the loss trains behavior while the
-    rendered context is read but never imitated.
+    Only turns that executed an action carry loss. Their quarter earnings
+    are normalized across the batch's acted turns and mapped through
+    max(0, exp(z) - 1), so a neutral- or negative-advantage turn
+    contributes nothing at all: the loss imitates only decisions that
+    scored above the batch, never chatter and never inaction. This is the
+    correction to the first pilots, where weights centered at one imitated
+    every turn at full strength and self-imitation of chatter collapsed
+    the model.
     """
     import torch
 
-    all_earnings = [value for game in games for value in game['earnings']]
-    mean = statistics.mean(all_earnings)
-    spread = statistics.pstdev(all_earnings)
+    acted_earnings = [
+        earnings for game in games
+        for earnings, acted in zip(game['earnings'], game['acted'])
+        if acted
+    ]
+    mean = statistics.mean(acted_earnings)
+    spread = statistics.pstdev(acted_earnings)
     spread = spread if spread > 1e-6 else 1.0
     rows = []
     for game in games:
@@ -249,13 +260,17 @@ def _batch_tensors(games, simtrain_config, block_size, device):
         offset = max(0, len(token_ids) - (block_size + 1))
         token_ids = token_ids[offset:]
         weights = [0.0] * (len(token_ids) - 1)
-        for (span_start, span_end), earnings in zip(
-                game['spans'], game['earnings']):
+        for (span_start, span_end), earnings, acted in zip(
+                game['spans'], game['earnings'], game['acted']):
+            if not acted:
+                continue
             normalized = (earnings - mean) / spread
             weight = math.exp(
                 normalized / simtrain_config.weight_temperature
             )
-            weight = min(weight, simtrain_config.weight_clip)
+            weight = max(0.0, min(weight, simtrain_config.weight_clip) - 1.0)
+            if weight <= 0.0:
+                continue
             for position in range(span_start - offset - 1,
                                   span_end - offset - 1):
                 if 0 <= position < len(weights):
@@ -270,11 +285,6 @@ def _batch_tensors(games, simtrain_config, block_size, device):
         inputs[row_index, :length] = torch.tensor(token_ids[:-1])
         targets[row_index, :length] = torch.tensor(token_ids[1:])
         weight_tensor[row_index, :length] = torch.tensor(weights)
-    total = weight_tensor.sum()
-    if total > 0:
-        weight_tensor = weight_tensor * (
-            (weight_tensor > 0).sum() / total
-        )
     return (inputs.to(device), targets.to(device), weight_tensor.to(device))
 
 
@@ -424,6 +434,7 @@ def run(config):
 
     recent_returns = []
     best_rolling = -float('inf')
+    no_signal_streak = 0
     interval_start = time.time()
     for step in range(start_step, simtrain_config.maximum_steps):
         current_learning_rate = learning_rate_at(step, simtrain_config)
@@ -442,51 +453,74 @@ def run(config):
         )
         model.train()
 
-        all_earnings = [
-            value for game in games for value in game['earnings']
+        acted_earnings = [
+            earnings for game in games
+            for earnings, acted in zip(game['earnings'], game['acted'])
+            if acted
         ]
-        flat_signal = statistics.pstdev(all_earnings) < 1e-6
+        no_signal = (
+            len(acted_earnings) < 2
+            or statistics.pstdev(acted_earnings) < 1e-6
+        )
         update_started = time.time()
-        optimizer.zero_grad(set_to_none=True)
         game_loss = None
         replay_loss = None
         loss = None
         weights = None
-        with autocast:
-            if not flat_signal:
+        if not no_signal:
+            optimizer.zero_grad(set_to_none=True)
+            with autocast:
                 inputs, targets, weights = _batch_tensors(
                     games, simtrain_config, block_size, device
                 )
-                logits, _ = model(inputs, targets)
-                per_token = functional.cross_entropy(
-                    logits.view(-1, logits.size(-1)), targets.view(-1),
-                    reduction='none',
-                ).view_as(weights)
-                game_loss = (per_token * weights).sum() / weights.sum().clamp(
-                    min=1.0
-                )
-                loss = game_loss
-            if replay is not None:
-                replay_inputs, replay_targets = replay.get_batch(
-                    max(1, int(simtrain_config.games_per_batch
-                               * simtrain_config.replay_fraction)),
-                    device, replay_random,
-                )
-                _, replay_loss = model(replay_inputs, replay_targets)
-                if loss is None:
-                    loss = replay_loss
-                else:
-                    loss = (
-                        (1.0 - simtrain_config.replay_fraction) * game_loss
-                        + simtrain_config.replay_fraction * replay_loss
+                if weights.sum() > 0:
+                    logits, _ = model(inputs, targets)
+                    per_token = functional.cross_entropy(
+                        logits.view(-1, logits.size(-1)), targets.view(-1),
+                        reduction='none',
+                    ).view_as(weights)
+                    game_loss = (
+                        (per_token * weights).sum() / weights.sum()
                     )
-        if loss is not None:
-            loss.backward()
-            if simtrain_config.gradient_clip > 0:
-                torch.nn.utils.clip_grad_norm_(
-                    base_model.parameters(), simtrain_config.gradient_clip
+                    loss = game_loss
+                    if replay is not None:
+                        replay_inputs, replay_targets = replay.get_batch(
+                            max(1, int(simtrain_config.games_per_batch
+                                       * simtrain_config.replay_fraction)),
+                            device, replay_random,
+                        )
+                        _, replay_loss = model(
+                            replay_inputs, replay_targets
+                        )
+                        loss = (
+                            (1.0 - simtrain_config.replay_fraction)
+                            * game_loss
+                            + simtrain_config.replay_fraction * replay_loss
+                        )
+                else:
+                    no_signal = True
+            if loss is not None:
+                loss.backward()
+                if simtrain_config.gradient_clip > 0:
+                    torch.nn.utils.clip_grad_norm_(
+                        base_model.parameters(),
+                        simtrain_config.gradient_clip
+                    )
+                optimizer.step()
+        if no_signal:
+            no_signal_streak += 1
+            if (simtrain_config.no_signal_abort_steps > 0
+                    and no_signal_streak
+                    >= simtrain_config.no_signal_abort_steps):
+                raise SystemExit(
+                    'aborting: %d consecutive steps without actionable '
+                    'signal (no executed trades with earnings variance); '
+                    'the model is not engaging the market — check '
+                    'gate_report.json, the bridging stages, and the entry '
+                    'difficulty before rerunning' % no_signal_streak
                 )
-            optimizer.step()
+        else:
+            no_signal_streak = 0
         update_seconds = time.time() - update_started
 
         mean_return = statistics.mean(
@@ -501,7 +535,8 @@ def run(config):
             'step': step,
             'field_count': field_count,
             'companies_per_field': companies_per_field,
-            'flat_signal': flat_signal,
+            'no_signal': no_signal,
+            'updated': not no_signal,
             'mean_return': round(mean_return, 2),
             'rolling_return': round(rolling, 2),
             'no_reason_rate': round(stats['no_reason'] / stats['turns'], 3),
@@ -557,7 +592,8 @@ def run(config):
                 '%.3f' % game_loss.item() if game_loss is not None else '-',
                 '%.3f' % replay_loss.item() if replay_loss is not None
                 else '-',
-                '  FLAT-SIGNAL (replay-only update)' if flat_signal else '',
+                '  NO-SIGNAL (no update, streak %d)' % no_signal_streak
+                if no_signal else '',
                 mean_return, rolling, blind_reference, oracle_reference,
                 stats['no_reason'] / stats['turns'],
                 stats['acted'] / stats['turns'],

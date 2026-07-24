@@ -217,6 +217,8 @@ class SimTrainConfig:
     entry_threshold: float = 0.25
     entry_probe_games: int = 16
     curriculum: list = field(default_factory=list)
+    exemplar_turn: bool = True
+    no_signal_abort_steps: int = 25
     render_mode: str = 'template'
     log_interval: int = 10
     checkpoint_interval: int = 100

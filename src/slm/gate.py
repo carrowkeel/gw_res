@@ -70,6 +70,7 @@ def probe(model, tokenizer, config, block_size, device, games_count=None):
             block = render.render_quarter(
                 game['state'], game['market'], game['random'],
                 protocol_line=simtrain_config.protocol_line,
+                exemplar_turn=simtrain_config.exemplar_turn,
             )
             prefix = ('\n' if quarter else '') + block
             game['token_ids'].extend(tokenizer.encode(prefix))
