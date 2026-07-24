@@ -98,6 +98,7 @@ def evaluate_model(model, tokenizer, records, sfteval_config, block_size,
         f1_total += f1
         rows.append({
             'question': record.get('question'),
+            'kind': record.get('kind'),
             'reference': record['response'],
             'prediction': prediction,
             'f1': round(f1, 3),
@@ -111,6 +112,23 @@ def evaluate_model(model, tokenizer, records, sfteval_config, block_size,
         'mean_f1': round(f1_total / len(records), 4) if records else 0.0,
         'similarity_threshold': sfteval_config.similarity_threshold,
     }
+    kinds = {}
+    for row in rows:
+        if row['kind'] is None:
+            continue
+        entry = kinds.setdefault(row['kind'], [0, 0, 0.0])
+        entry[0] += 1
+        entry[1] += int(row['answered'])
+        entry[2] += row['f1']
+    if kinds:
+        report['by_kind'] = {
+            kind: {
+                'examples': count,
+                'answered_rate': round(answered / count, 4),
+                'mean_f1': round(f1_sum / count, 4),
+            }
+            for kind, (count, answered, f1_sum) in sorted(kinds.items())
+        }
     return report, rows
 
 

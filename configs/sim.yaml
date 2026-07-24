@@ -12,6 +12,8 @@ simtrain:
   maximum_steps: 150
   no_reason_action_probability: 0.5
   protocol_line: true
+  entry_threshold: 0.25
+  entry_probe_games: 16
   learning_rate: 0.0001
   minimum_learning_rate: 0.00001
   warmup_steps: 50

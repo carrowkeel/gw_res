@@ -68,7 +68,9 @@ model's improvement on each capability is tracked on its own:
 - **Arithmetic SFT** teaches basic arithmetic (integer addition,
   subtraction, comparison in the sim's numeric range), same dialogue
   format, non-sim labels and subjects; generated programmatically with
-  exact ground truth.
+  exact ground truth. Implemented in mathsft.py as the mathsft stage,
+  starting from the communication checkpoint; its eval report breaks the
+  answered rate down by operation kind.
 
 Each stage generates its own data inside its own stage job, never into the
 stage-1 corpus or a global generation stage. After each stage the generic
@@ -171,8 +173,14 @@ allocation is a reallocation, not new cost.
 
 **Stage 1 to 2 link.** Vocabulary subset by design (above); replay of
 stage-1 data into stage-2 batches (machinery already built in finetune.py
-as replay_fraction); the capability threshold implemented as a stopping
-mechanism with its measure decided from pilot runs.
+as replay_fraction); and the entry gate (gate.py), which measures the
+genuine actionable rate — the fraction of trader turns the pattern parser
+can act on from the raw text alone, with no reason gate and no charitable
+rewriting. The simulator probes the base checkpoint before its first step
+and refuses to start below simtrain.entry_threshold; the same probe runs
+standalone (the gate stage) to measure where any checkpoint stands. The
+simulator builds on the furthest bridging stage the base run completed
+(mathsft, then commsft, then pretrain).
 
 ### Stage 3 — real problems (later)
 

@@ -20,6 +20,9 @@ from .utils import get_logger, normalize_state_dict
 logger = get_logger('sftstage')
 
 
+STAGE_ORDER = ['mathsft', 'commsft', 'pretrain']
+
+
 def resolve_checkpoint(directory):
     """Return the best checkpoint in a stage directory, falling back to last."""
     best = directory / 'ckpt_best.pt'
@@ -28,6 +31,23 @@ def resolve_checkpoint(directory):
     last = directory / 'ckpt_last.pt'
     if last.exists():
         return last
+    return None
+
+
+def resolve_base_checkpoint(base_directory):
+    """Return the furthest-stage checkpoint a run tree has produced.
+
+    The stage chain is pretrain, then communication SFT, then arithmetic
+    SFT; a downstream consumer (the gate, the simulator) builds on the
+    latest stage the base run completed.
+    """
+    from pathlib import Path
+
+    base_directory = Path(base_directory)
+    for stage in STAGE_ORDER:
+        found = resolve_checkpoint(base_directory / 'checkpoints' / stage)
+        if found is not None:
+            return found
     return None
 
 

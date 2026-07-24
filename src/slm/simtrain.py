@@ -42,12 +42,14 @@ logger = get_logger('simtrain')
 
 
 def _base_paths(config):
+    from .sftstage import resolve_base_checkpoint
+
     simtrain_config = config.simtrain
     if simtrain_config.base_run_dir:
         base = Path(simtrain_config.base_run_dir)
         return {
             'tokenizer': base / 'tokenizer' / 'tokenizer.json',
-            'checkpoint': base / 'checkpoints' / 'pretrain' / 'ckpt_best.pt',
+            'checkpoint': resolve_base_checkpoint(base),
             'packed': base / 'data' / 'packed',
         }
     return {
@@ -301,6 +303,28 @@ def run(config):
     logger.info('model: %.2fM parameters, block size %d',
                 model.count_parameters() / 1e6, block_size)
 
+    checkpoint_directory = ensure_directory(config.simtrain_dir)
+    if (simtrain_config.entry_threshold > 0
+            and not (checkpoint_directory / 'ckpt_last.pt').exists()):
+        from . import gate as gate_module
+
+        gate_report = gate_module.probe(
+            model, tokenizer, config, block_size, device
+        )
+        gate_module.write_report(
+            gate_report, checkpoint_directory / 'gate_report.json'
+        )
+        if not gate_report['passes']:
+            raise SystemExit(
+                'entry gate: actionable rate %.3f is below threshold %.2f; '
+                'the base model is not ready for simulation training (see '
+                'gate_report.json; train the bridging stages further or '
+                'lower simtrain.entry_threshold deliberately)' % (
+                    gate_report['actionable_rate'],
+                    simtrain_config.entry_threshold,
+                )
+            )
+
     replay = None
     if simtrain_config.replay_fraction > 0:
         replay = _load_replay(paths, block_size)
@@ -333,7 +357,6 @@ def run(config):
         (simtrain_config.beta1, simtrain_config.beta2), device_type,
     )
 
-    checkpoint_directory = ensure_directory(config.simtrain_dir)
     start_step = 0
     last_checkpoint = checkpoint_directory / 'ckpt_last.pt'
     if last_checkpoint.exists():
