@@ -121,6 +121,44 @@ def _load_replay(config, block_size):
     return PackedDataset(train_path, meta['dtype'], block_size)
 
 
+def _load_replay_validation(config, block_size):
+    from .data import PackedDataset
+
+    packed_directory = config.data_dir / 'packed'
+    meta_path = packed_directory / 'meta.json'
+    validation_path = packed_directory / 'val.bin'
+    if not (meta_path.exists() and validation_path.exists()):
+        return None
+    meta = json.loads(meta_path.read_text())
+    dataset = PackedDataset(validation_path, meta['dtype'], block_size)
+    return dataset if dataset.length() > 0 else None
+
+
+def replay_validation_loss(model, dataset, batch_size, device, autocast,
+                           batches=8):
+    """Stage-1 loss on fixed held-out batches: the forgetting gauge.
+
+    The same offsets are drawn every call, so the number is comparable
+    across evaluations; upward drift over an SFT stage is the warning sign
+    that stage-1 language is being overwritten.
+    """
+    import torch
+
+    generator = numpy.random.default_rng(202607)
+    model.eval()
+    losses = []
+    with torch.no_grad():
+        for _ in range(batches):
+            inputs, targets = dataset.get_batch(
+                batch_size, device, generator
+            )
+            with autocast:
+                _, loss = model(inputs, targets)
+            losses.append(loss.item())
+    model.train()
+    return sum(losses) / len(losses) if losses else float('inf')
+
+
 def _mean_loss(model, dataset, indices, batch_size, device, autocast):
     import torch
 
@@ -188,6 +226,7 @@ def train_stage(config, stage_config, tokenizer, train_records,
     replay = None
     if stage_config.replay_fraction > 0.0:
         replay = _load_replay(config, gpt_config.block_size)
+    replay_validation = _load_replay_validation(config, gpt_config.block_size)
     replay_generator = numpy.random.default_rng(config.project.seed + 7)
     random_generator = numpy.random.default_rng(config.project.seed)
 
@@ -249,6 +288,23 @@ def train_stage(config, stage_config, tokenizer, train_records,
     history_path = checkpoint_directory / 'history.jsonl'
     if history_path.exists():
         history_path.unlink()
+
+    initial_replay_loss = None
+    if replay_validation is not None:
+        initial_replay_loss = replay_validation_loss(
+            model, replay_validation, stage_config.batch_size, device,
+            autocast,
+        )
+        logger.info(
+            '%s: stage-1 replay validation loss before training %.4f '
+            '(the forgetting reference)', name, initial_replay_loss,
+        )
+        with open(history_path, 'a') as handle:
+            handle.write(json.dumps({
+                'step': -1,
+                'replay_validation_loss': round(initial_replay_loss, 4),
+            }) + '\n')
+
     best_validation = float('inf')
     step = 0
     step_loss = 0.0
@@ -303,6 +359,12 @@ def train_stage(config, stage_config, tokenizer, train_records,
                 model, validation, list(range(validation.length())),
                 stage_config.batch_size, device, autocast,
             )
+            replay_validation_value = None
+            if replay_validation is not None:
+                replay_validation_value = replay_validation_loss(
+                    model, replay_validation, stage_config.batch_size,
+                    device, autocast,
+                )
             with open(history_path, 'a') as handle:
                 handle.write(json.dumps({
                     'step': step,
@@ -312,10 +374,18 @@ def train_stage(config, stage_config, tokenizer, train_records,
                         round(replay_loss_value, 4)
                         if replay_loss_value is not None else None
                     ),
+                    'replay_validation_loss': (
+                        round(replay_validation_value, 4)
+                        if replay_validation_value is not None else None
+                    ),
                 }) + '\n')
             logger.info(
-                '%s step %d  val loss %.4f (best %.4f)',
+                '%s step %d  val loss %.4f (best %.4f)  replay val %s%s',
                 name, step, validation_loss, best_validation,
+                '%.4f' % replay_validation_value
+                if replay_validation_value is not None else '-',
+                ' (started %.4f)' % initial_replay_loss
+                if initial_replay_loss is not None else '',
             )
             if validation_loss < best_validation:
                 best_validation = validation_loss
@@ -330,11 +400,25 @@ def train_stage(config, stage_config, tokenizer, train_records,
         if final_validation < best_validation:
             best_validation = final_validation
             save(step, 'ckpt_best.pt', step_loss, final_validation)
+        final_replay = None
+        if replay_validation is not None:
+            final_replay = replay_validation_loss(
+                model, replay_validation, stage_config.batch_size, device,
+                autocast,
+            )
+            logger.info(
+                '%s: stage-1 replay validation loss after training %.4f '
+                '(started %.4f)', name, final_replay, initial_replay_loss,
+            )
         with open(history_path, 'a') as handle:
             handle.write(json.dumps({
                 'step': step,
                 'train_loss': round(step_loss, 4),
                 'validation_loss': round(final_validation, 4),
+                'replay_validation_loss': (
+                    round(final_replay, 4)
+                    if final_replay is not None else None
+                ),
             }) + '\n')
     save(step, 'ckpt_last.pt', step_loss, final_validation)
     logger.info('%s complete -> %s', name, checkpoint_directory)

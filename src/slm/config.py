@@ -136,6 +136,7 @@ class CommSftConfig:
     number_of_dialogues: int = 20000
     holdout_fraction: float = 0.02
     minimum_turns: int = 5
+    minimum_grounding: float = 0.6
     batch_size: int = 16
     gradient_accumulation_steps: int = 2
     epochs: int = 2
@@ -215,6 +216,7 @@ class SimTrainConfig:
     protocol_line: bool = True
     entry_threshold: float = 0.25
     entry_probe_games: int = 16
+    curriculum: list = field(default_factory=list)
     render_mode: str = 'template'
     log_interval: int = 10
     checkpoint_interval: int = 100

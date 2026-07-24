@@ -38,24 +38,26 @@ def probe(model, tokenizer, config, block_size, device, games_count=None):
     Parsed actions still execute so later quarters carry realistic
     holdings, but nothing is trained and nothing is charitably rewritten.
     """
-    from .simtrain import _generate_decisions
+    from .simtrain import _difficulty_at, _generate_decisions, \
+        _reference_returns
 
     simtrain_config = config.simtrain
     games_count = games_count or simtrain_config.entry_probe_games
+    field_count, companies_per_field = _difficulty_at(simtrain_config, 0)
     games = []
     for game_index in range(games_count):
         game_random = random.Random(
             config.project.seed + PROBE_SEED_OFFSET + game_index
         )
         game_market = market.sample_market(
-            game_random, simtrain_config.field_count,
-            simtrain_config.companies_per_field,
+            game_random, field_count, companies_per_field,
         )
         games.append({
             'random': game_random,
             'market': game_market,
             'state': market.start_game(game_market, game_random),
             'token_ids': [tokenizer.bos_id],
+            'earnings': 0.0,
         })
     turns = 0
     actionable = 0
@@ -93,11 +95,25 @@ def probe(model, tokenizer, config, block_size, device, games_count=None):
                     'match': match,
                     'reason_given': has_reason,
                 })
-            market.step_game(
+            earnings, _ = market.step_game(
                 game['market'], game['state'], actions, game['random']
             )
+            game['earnings'] += earnings
+    blind_reference, oracle_reference = _reference_returns(
+        simtrain_config, config.project.seed + PROBE_SEED_OFFSET,
+        field_count, companies_per_field,
+    )
+    mean_return = (
+        sum(game['earnings'] for game in games) / games_count
+        if games_count else 0.0
+    )
     return {
         'games': games_count,
+        'field_count': field_count,
+        'companies_per_field': companies_per_field,
+        'mean_return': round(mean_return, 2),
+        'blind_reference': round(blind_reference, 2),
+        'oracle_reference': round(oracle_reference, 2),
         'turns': turns,
         'actionable_rate': round(actionable / turns, 4) if turns else 0.0,
         'reason_rate': round(with_reason / turns, 4) if turns else 0.0,
@@ -121,11 +137,15 @@ def write_report(report, path):
         json.dump(report, handle, indent=2)
     logger.info(
         'gate: actionable %.3f (threshold %.2f, %s), reason %.3f, match '
-        '%.3f/%.3f over %d turns -> %s',
+        '%.3f/%.3f, return %+.1f (blind %+.1f, oracle %+.1f) at %dx%d '
+        'over %d turns -> %s',
         report['actionable_rate'], report['entry_threshold'],
         'passes' if report['passes'] else 'BELOW THRESHOLD',
         report['reason_rate'], report['match_exact_rate'],
-        report['match_fuzzy_rate'], report['turns'], path,
+        report['match_fuzzy_rate'], report['mean_return'],
+        report['blind_reference'], report['oracle_reference'],
+        report['field_count'], report['companies_per_field'],
+        report['turns'], path,
     )
 
 

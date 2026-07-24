@@ -63,8 +63,11 @@ model's improvement on each capability is tracked on its own:
   questions, which the base model has no concept of (it continues dialogue
   as chitchat). Data: dialogues in the stage-1 name-and-colon turn format
   whose last turn answers a direct question from the conversation; loss on
-  the answer turn only; stage-1 replay against forgetting. Implemented in
-  commsft.py as the commsft stage.
+  the answer turn only; stage-1 replay against forgetting. A programmatic
+  groundedness filter rejects generated answers that fabricate particulars
+  (any number absent from the dialogue, low content overlap), because the
+  target skill is retrieval from context, not plausible invention.
+  Implemented in commsft.py as the commsft stage.
 - **Arithmetic SFT** teaches basic arithmetic (integer addition,
   subtraction, comparison in the sim's numeric range), same dialogue
   format, non-sim labels and subjects; generated programmatically with
@@ -77,7 +80,12 @@ stage-1 corpus or a global generation stage. After each stage the generic
 eval module (sfteval.py) scores held-out answers by similarity — token
 overlap and containment, never format — against both the source checkpoint
 and the trained one; the same instrument thresholds entry into the
-simulator.
+simulator. Forgetting and collapse are watched in both stages: a fixed
+stage-1 replay validation loss is measured before, during, and after
+training (upward drift is the forgetting warning), and the eval reports
+carry repetition warning metrics (distinct-prediction rate, repeated-bigram
+rate) so the loop signature that collapsed the sim pilots is visible here
+too.
 
 ### Stage 2 — simulation training (the main effort)
 
@@ -120,6 +128,13 @@ Design constraints carried into implementation:
   constructed so that ignoring the reports has near-zero expected return
   (no exploitable price-only patterns). Otherwise the model can learn to
   trade without reading, and stage 2 stops training language comprehension.
+- Traction requires being slightly better than random from the start: a
+  model no better than a blind actor gives the outcome weighting nothing
+  but luck to amplify. The entry difficulty is therefore simplified (fewer
+  independent and dependent variables) and difficulty is scaled online
+  through simtrain.curriculum — per-step field and company counts, free of
+  cost because every step samples fresh markets. The entry gate probes at
+  the entry difficulty.
 - Source labels are part of the message format from the first design, even
   while all sources are still reliable — adding labels later would be a
   format break. Reliability variation arrives as curriculum.

@@ -106,6 +106,26 @@ def _generate_decisions(model, tokenizer, games, simtrain_config,
     return decisions
 
 
+def _difficulty_at(simtrain_config, step):
+    """Return (field_count, companies_per_field) for a step.
+
+    The curriculum is a list of rungs ({from_step, field_count,
+    companies_per_field}); the last rung whose from_step has been reached
+    wins, and the base config values apply before any rung. Because every
+    step samples fresh markets, difficulty scales online with no cost.
+    """
+    field_count = simtrain_config.field_count
+    companies_per_field = simtrain_config.companies_per_field
+    for rung in sorted(simtrain_config.curriculum,
+                       key=lambda rung: rung.get('from_step', 0)):
+        if step >= rung.get('from_step', 0):
+            field_count = rung.get('field_count', field_count)
+            companies_per_field = rung.get(
+                'companies_per_field', companies_per_field
+            )
+    return field_count, companies_per_field
+
+
 def _play_batch(model, tokenizer, config, llm_listener, step, block_size,
                 device):
     """Play games_per_batch games in lockstep; return games and turn stats.
@@ -114,14 +134,14 @@ def _play_batch(model, tokenizer, config, llm_listener, step, block_size,
     listener can interpret every game's turn in one batched call.
     """
     simtrain_config = config.simtrain
+    field_count, companies_per_field = _difficulty_at(simtrain_config, step)
     games = []
     for game_index in range(simtrain_config.games_per_batch):
         game_random = random.Random(
             config.project.seed + step * 100003 + game_index
         )
         game_market = market.sample_market(
-            game_random, simtrain_config.field_count,
-            simtrain_config.companies_per_field,
+            game_random, field_count, companies_per_field,
         )
         games.append({
             'random': game_random,
@@ -258,15 +278,18 @@ def _batch_tensors(games, simtrain_config, block_size, device):
     return (inputs.to(device), targets.to(device), weight_tensor.to(device))
 
 
-def _reference_returns(simtrain_config, seed, sample_games=200):
+def _reference_returns(simtrain_config, seed, field_count,
+                       companies_per_field, sample_games=200):
     blind = statistics.mean(
         market.play_game(market.blind_policy, seed + index,
-                         simtrain_config.quarters)[0]
+                         simtrain_config.quarters, field_count,
+                         companies_per_field)[0]
         for index in range(sample_games)
     )
     oracle = statistics.mean(
         market.play_game(market.oracle_policy, seed + index,
-                         simtrain_config.quarters)[0]
+                         simtrain_config.quarters, field_count,
+                         companies_per_field)[0]
         for index in range(sample_games)
     )
     return blind, oracle
@@ -366,11 +389,23 @@ def run(config):
         start_step = saved['step'] + 1
         logger.info('resumed from step %d', start_step)
 
-    blind_reference, oracle_reference = _reference_returns(
-        simtrain_config, config.project.seed + 999983
-    )
-    logger.info('reference returns per game: blind %+.1f, oracle %+.1f',
-                blind_reference, oracle_reference)
+    reference_cache = {}
+
+    def references_for(field_count, companies_per_field):
+        key = (field_count, companies_per_field)
+        if key not in reference_cache:
+            reference_cache[key] = _reference_returns(
+                simtrain_config, config.project.seed + 999983,
+                field_count, companies_per_field,
+            )
+            logger.info(
+                'references at %d fields x %d companies: blind %+.1f, '
+                'oracle %+.1f', field_count, companies_per_field,
+                reference_cache[key][0], reference_cache[key][1],
+            )
+        return reference_cache[key]
+
+    references_for(*_difficulty_at(simtrain_config, start_step))
 
     def save_checkpoint(step, tag, mean_return):
         payload = {
@@ -394,6 +429,12 @@ def run(config):
         current_learning_rate = learning_rate_at(step, simtrain_config)
         for group in optimizer.param_groups:
             group['lr'] = current_learning_rate
+        field_count, companies_per_field = _difficulty_at(
+            simtrain_config, step
+        )
+        blind_reference, oracle_reference = references_for(
+            field_count, companies_per_field
+        )
 
         model.eval()
         games, stats, sample_turn = _play_batch(
@@ -458,6 +499,8 @@ def run(config):
 
         row = {
             'step': step,
+            'field_count': field_count,
+            'companies_per_field': companies_per_field,
             'flat_signal': flat_signal,
             'mean_return': round(mean_return, 2),
             'rolling_return': round(rolling, 2),

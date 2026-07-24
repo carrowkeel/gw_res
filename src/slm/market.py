@@ -287,10 +287,10 @@ def oracle_policy(market, state, random_generator):
     return actions
 
 
-def play_game(policy, seed, quarters=12):
+def play_game(policy, seed, quarters=12, field_count=3, companies_per_field=2):
     """Play one full game under a policy; return total and per-step earnings."""
     random_generator = random.Random(seed)
-    market = sample_market(random_generator)
+    market = sample_market(random_generator, field_count, companies_per_field)
     state = start_game(market, random_generator)
     earnings_by_quarter = []
     for _ in range(quarters):
