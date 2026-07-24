@@ -132,7 +132,8 @@ def _play_batch(model, tokenizer, config, llm_listener, step, block_size,
         })
     stats = {'turns': 0, 'no_reason': 0, 'acted': 0,
              'match_exact': 0, 'match_fuzzy': 0, 'match_none': 0,
-             'advisor_earnings': [], 'no_advisor_earnings': []}
+             'advisor_earnings': [], 'no_advisor_earnings': [],
+             'generate_seconds': 0.0, 'listener_seconds': 0.0}
     gate_random = random.Random(config.project.seed + step * 100003 + 7)
     sample_turn = None
     for quarter in range(simtrain_config.quarters):
@@ -143,9 +144,11 @@ def _play_batch(model, tokenizer, config, llm_listener, step, block_size,
             )
             prefix = ('\n' if quarter else '') + block
             game['token_ids'].extend(tokenizer.encode(prefix))
+        phase_started = time.time()
         decisions = _generate_decisions(
             model, tokenizer, games, simtrain_config, block_size, device,
         )
+        stats['generate_seconds'] += time.time() - phase_started
         turns = []
         for game, decision_text in zip(games, decisions):
             decision_ids = tokenizer.encode(' ' + decision_text)
@@ -153,6 +156,7 @@ def _play_batch(model, tokenizer, config, llm_listener, step, block_size,
             game['token_ids'].extend(decision_ids)
             game['spans'].append((span_start, len(game['token_ids'])))
             turns.append((decision_text, game['market'], game['state']))
+        phase_started = time.time()
         if llm_listener is not None:
             results = llm_listener.interpret_batch(
                 turns, simtrain_config.no_reason_action_probability,
@@ -167,6 +171,7 @@ def _play_batch(model, tokenizer, config, llm_listener, step, block_size,
                 )
                 for text, turn_market, turn_state in turns
             ]
+        stats['listener_seconds'] += time.time() - phase_started
         if sample_turn is None and turns:
             sample_turn = (turns[0][0], results[0])
         for game, turn, result in zip(games, turns, results):
@@ -377,6 +382,7 @@ def run(config):
             value for game in games for value in game['earnings']
         ]
         flat_signal = statistics.pstdev(all_earnings) < 1e-6
+        update_started = time.time()
         optimizer.zero_grad(set_to_none=True)
         game_loss = None
         replay_loss = None
@@ -417,6 +423,7 @@ def run(config):
                     base_model.parameters(), simtrain_config.gradient_clip
                 )
             optimizer.step()
+        update_seconds = time.time() - update_started
 
         mean_return = statistics.mean(
             sum(game['earnings']) for game in games
@@ -437,6 +444,9 @@ def run(config):
                 stats['match_exact'] / stats['turns'], 3),
             'match_fuzzy_rate': round(
                 stats['match_fuzzy'] / stats['turns'], 3),
+            'generate_seconds': round(stats['generate_seconds'], 2),
+            'listener_seconds': round(stats['listener_seconds'], 2),
+            'update_seconds': round(update_seconds, 2),
         }
         if loss is not None:
             row['loss'] = round(loss.item(), 4)
@@ -475,7 +485,8 @@ def run(config):
             logger.info(
                 'step %d/%d  game %s  replay %s%s  return %+.1f (rolling '
                 '%+.1f, blind %+.1f, oracle %+.1f)  no-reason %.2f  acted '
-                '%.2f  match %.2f/%.2f  %.2fs/it',
+                '%.2f  match %.2f/%.2f  %.2fs/it (generate %.1f, listener '
+                '%.1f, update %.1f)',
                 step, simtrain_config.maximum_steps,
                 '%.3f' % game_loss.item() if game_loss is not None else '-',
                 '%.3f' % replay_loss.item() if replay_loss is not None
@@ -487,6 +498,8 @@ def run(config):
                 stats['match_exact'] / stats['turns'],
                 stats['match_fuzzy'] / stats['turns'],
                 elapsed / max(1, simtrain_config.log_interval),
+                stats['generate_seconds'], stats['listener_seconds'],
+                update_seconds,
             )
             if sample_turn is not None:
                 logger.info('sample turn: %r -> %s',

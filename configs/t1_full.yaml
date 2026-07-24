@@ -54,6 +54,28 @@ pretrain:
   early_stop_patience: 0
   instruction_fraction: 0.0
 
+commsft:
+  number_of_dialogues: 20000
+  holdout_fraction: 0.02
+  minimum_turns: 5
+  batch_size: 16
+  gradient_accumulation_steps: 2
+  epochs: 2
+  learning_rate: 0.00003
+  minimum_learning_rate: 0.000003
+  warmup_ratio: 0.03
+  replay_fraction: 0.2
+  evaluation_interval: 100
+  log_interval: 20
+
+sfteval:
+  max_new_tokens: 64
+  temperature: 0.3
+  top_p: 0.9
+  similarity_threshold: 0.4
+  maximum_examples: 300
+  sample_dump: 25
+
 eval:
   judge_model: null
   number_of_generation_samples: 40

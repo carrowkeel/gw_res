@@ -28,6 +28,8 @@ corpora. A config selects free generation simply by naming the free types in
 generate.text_type_weights; the grounded path stays intact as the baseline.
 """
 
+import re
+
 from . import seeds, worldgen
 
 TEXT_TYPES = ['prose', 'conversation', 'definition', 'description', 'reasoning']
@@ -365,6 +367,117 @@ def _dialogue_prompt(random_generator):
             direction,
         )
     )
+
+
+QA_QUESTION_WORDS = [
+    'what', 'which', 'who', 'where', 'when', 'why', 'how', 'how many',
+]
+
+_QA_DIALOGUE_EXEMPLAR = (
+    'Renn: The shipment from Dalmer arrived this morning, two days early.\n'
+    'Mara: Early? They quoted us the ninth.\n'
+    'Renn: The driver said they rerouted through Castine because the bridge '
+    'at Orlen was closed.\n'
+    'Mara: Then the invoice should be lower too. We agreed on forty for the '
+    'long route.\n'
+    'Renn: I checked, they billed thirty-two for the shorter run.\n'
+    'Mara: Which route did the shipment take in the end?\n'
+    'Renn: It came through Castine, because the bridge at Orlen was closed.'
+)
+
+
+def build_qa_dialogue_prompt(random_generator):
+    """Return a prompt for a dialogue whose last turn answers a question.
+
+    The conversation states concrete particulars along the way, the
+    second-to-last turn asks one direct question about them, and the last
+    turn answers it from what was said. This is the communication SFT data:
+    the same turn format as the stage-1 dialogue corpus, with the answer
+    turn as the supervised response.
+    """
+    speaker_count = 2 if random_generator.random() < 0.7 else 3
+    minimum_turns = random_generator.choice([5, 6, 8])
+    return (
+        'Write a conversation of at least %d turns between %d people, on a '
+        'subject of your choosing from %s, in %s. The speakers should state '
+        'concrete particulars along the way: names, numbers, places, times, '
+        'or decisions. The second-to-last turn must be one speaker asking a '
+        'single direct question starting with the word %s, about something '
+        'stated earlier in the conversation. The last turn must be a '
+        'different speaker answering that question correctly in one or two '
+        'sentences, using only what was said. Give each speaker a name and '
+        'begin every turn with the name and a colon.' % (
+            minimum_turns, speaker_count,
+            random_generator.choice(seeds.SUBJECT_DOMAINS),
+            _toned(random_generator.choice(seeds.TONES)),
+            random_generator.choice(QA_QUESTION_WORDS),
+        )
+    ) + _BEGIN_DIRECTLY
+
+
+def qa_dialogue_example_turns():
+    """Return the fixed few-shot turn pair for question-answering dialogues.
+
+    Unlike the free types, this generation carries one exemplar: the data
+    must parse into a question turn and an answer turn, and format
+    compliance matters more here than stylistic breadth.
+    """
+    return [
+        {
+            'role': 'user',
+            'content': (
+                'Write a conversation of at least 6 turns between 2 people, '
+                'on a subject of your choosing from commerce and trade, in a '
+                'plain tone. The speakers should state concrete particulars '
+                'along the way: names, numbers, places, times, or decisions. '
+                'The second-to-last turn must be one speaker asking a single '
+                'direct question starting with the word which, about '
+                'something stated earlier in the conversation. The last turn '
+                'must be a different speaker answering that question '
+                'correctly in one or two sentences, using only what was '
+                'said. Give each speaker a name and begin every turn with '
+                'the name and a colon.' + _BEGIN_DIRECTLY
+            ),
+        },
+        {'role': 'assistant', 'content': _QA_DIALOGUE_EXEMPLAR},
+    ]
+
+
+_TURN_PATTERN = re.compile(r'([A-Z][\w \-]{0,30}):\s*(.+)$')
+
+
+def parse_qa_dialogue(text, minimum_turns):
+    """Split a generated dialogue into a prompt and its answer-turn response.
+
+    Returns {'prompt', 'response', 'question'} where the prompt is every
+    turn up to and including the question plus the answering speaker's cue,
+    and the response is the answer text, or None when the dialogue does not
+    have the required shape (name-and-colon turns, enough of them, a
+    question in the second-to-last, a different speaker answering last).
+    """
+    turns = []
+    for line in text.strip().split('\n'):
+        stripped = line.strip()
+        if not stripped:
+            continue
+        found = _TURN_PATTERN.match(stripped)
+        if found is None:
+            return None
+        turns.append((found.group(1).strip(), found.group(2).strip()))
+    if len(turns) < minimum_turns:
+        return None
+    question_speaker, question = turns[-2]
+    answer_speaker, answer = turns[-1]
+    if '?' not in question or answer_speaker == question_speaker:
+        return None
+    prompt = '\n'.join(
+        '%s: %s' % (speaker, turn) for speaker, turn in turns[:-1]
+    )
+    return {
+        'prompt': '%s\n%s:' % (prompt, answer_speaker),
+        'response': answer,
+        'question': question,
+    }
 
 
 _BUILDERS = {
