@@ -9,7 +9,9 @@ simtrain:
   quarters: 8
   field_count: 3
   companies_per_field: 2
-  maximum_steps: 1000
+  maximum_steps: 150
+  no_reason_action_probability: 0.5
+  protocol_line: true
   learning_rate: 0.0001
   minimum_learning_rate: 0.00001
   warmup_steps: 50
@@ -52,6 +54,6 @@ slurm:
   gres: gpu:l40s:1
   memory: 64G
   cpus_per_task: 8
-  time_limit: "12:00:00"
+  time_limit: "06:00:00"
   log_dir: runs/sim/slurm_logs
   extra_sbatch: []

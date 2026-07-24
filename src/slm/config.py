@@ -156,6 +156,8 @@ class SimTrainConfig:
     max_decision_tokens: int = 48
     listener_mode: str = 'pattern'
     listener_model: str = None
+    no_reason_action_probability: float = 0.5
+    protocol_line: bool = True
     render_mode: str = 'template'
     log_interval: int = 10
     checkpoint_interval: int = 100
