@@ -26,7 +26,7 @@ simtrain:
   sample_top_p: 0.95
   max_decision_tokens: 48
   listener_mode: llm
-  listener_model: null
+  listener_model: Qwen/Qwen2.5-3B-Instruct
   render_mode: template
   log_interval: 10
   checkpoint_interval: 100
@@ -40,10 +40,10 @@ model:
 
 generate:
   default_model: Qwen/Qwen2.5-7B-Instruct
-  gpu_memory_utilization: 0.45
+  gpu_memory_utilization: 0.35
   max_model_len: 2048
   dtype: bfloat16
-  max_tokens: 96
+  max_tokens: 48
   temperature: 0.2
   top_p: 0.9
 
