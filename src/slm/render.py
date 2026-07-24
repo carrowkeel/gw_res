@@ -93,15 +93,28 @@ def render_report_message(report, market, random_generator):
     )
 
 
-def render_quarter(state, market, random_generator):
+PROTOCOL_MESSAGE = (
+    '%s: State your orders each quarter as buy or sell, a number of '
+    'shares, the company name, and the reason, for example: buy 2 shares '
+    'of the strongest company because its demand is rising. Say hold if '
+    'you want no trade.' % STATE_SPEAKER
+)
+
+
+def render_quarter(state, market, random_generator, protocol_line=True):
     """Render one quarter's context block, ending at the model's cue.
 
     Returns the block text whose last line is the trader label and colon,
     with no trailing newline, so the model's generation continues the line.
+    The first quarter can carry a broker protocol message stating the
+    order format: in-context instruction for a cold-start model, never
+    training data.
     """
     from .market import state_summary
 
     lines = [render_state_message(state_summary(state), random_generator)]
+    if protocol_line and state['quarter'] == 1:
+        lines.append(PROTOCOL_MESSAGE)
     for report in state['reports']:
         lines.append(render_report_message(report, market, random_generator))
     lines.append('%s:' % MODEL_SPEAKER)

@@ -180,9 +180,15 @@ Pilot sequence:
       --stages generate,tokenizer,data,pretrain
 
 Note the printed run id: the stage-1 tree lands at runs/t1-<id>. Then
-point simtrain.base_run_dir in configs/sim.yaml at that tree and
+name that tree as the base when submitting the simulation stage:
 
-    python slurm/submit.py --config configs/sim.yaml --stages simtrain
+    python slurm/submit.py --config configs/sim.yaml --stages simtrain \
+      --base-run runs/t1_full-<id>
+
+The base is an explicit per-submission argument (baked into the resolved
+config the job reads) rather than a value committed in sim.yaml, so
+promoting a new stage-1 run never requires editing the repo; the
+submitter refuses a simtrain submission with no base named.
 
 The pilot runs on one L40S: the listener LLM is capped at 0.45 GPU
 memory and shares the device with the small training model (the same

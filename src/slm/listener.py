@@ -101,18 +101,30 @@ def parse_orders(text, market, state):
     return actions, worst
 
 
-def interpret(text, market, state):
+def _gate_passes(has_reason, no_reason_probability, random_generator):
+    if has_reason:
+        return True
+    if no_reason_probability <= 0.0 or random_generator is None:
+        return False
+    return random_generator.random() < no_reason_probability
+
+
+def interpret(text, market, state, no_reason_probability=0.0,
+              random_generator=None):
     """Pattern-mode interpretation of one trader turn.
 
-    Gates on the reason requirement, then parses orders directly from the
-    trader's own words.
+    The reason gate is soft: a turn with a reason always proceeds to
+    parsing, a reasonless turn proceeds with no_reason_probability, so
+    reasons make the listener reliable rather than being an absolute
+    precondition. Annealing the probability toward zero recovers the
+    strict gate as the end state.
     """
     has_reason = reason_given(text)
-    if not has_reason:
-        return {'actions': [], 'reason_given': False, 'match': 'none',
+    if not _gate_passes(has_reason, no_reason_probability, random_generator):
+        return {'actions': [], 'reason_given': has_reason, 'match': 'none',
                 'acted': False, 'rewrite': None}
     actions, match = parse_orders(text, market, state)
-    return {'actions': actions, 'reason_given': True, 'match': match,
+    return {'actions': actions, 'reason_given': has_reason, 'match': match,
             'acted': bool(actions), 'rewrite': None}
 
 
@@ -153,17 +165,22 @@ class LlmListener:
                 self.model_name, self.generate_config
             )
 
-    def interpret_batch(self, turns):
+    def interpret_batch(self, turns, no_reason_probability=0.0,
+                        random_generator=None):
         """Interpret [(text, market, state), ...] into result dicts."""
         results = [None] * len(turns)
         pending = []
+        reasons = {}
         for index, (text, market, state) in enumerate(turns):
-            if not reason_given(text):
-                results[index] = {'actions': [], 'reason_given': False,
+            has_reason = reason_given(text)
+            reasons[index] = has_reason
+            if _gate_passes(has_reason, no_reason_probability,
+                            random_generator):
+                pending.append(index)
+            else:
+                results[index] = {'actions': [], 'reason_given': has_reason,
                                   'match': 'none', 'acted': False,
                                   'rewrite': None}
-            else:
-                pending.append(index)
         if pending:
             self._ensure_engine()
             from .generate import _chat
@@ -181,7 +198,8 @@ class LlmListener:
                     direct, direct_match = parse_orders(text, market, state)
                     if direct != actions:
                         match = 'fuzzy'
-                results[index] = {'actions': actions, 'reason_given': True,
+                results[index] = {'actions': actions,
+                                  'reason_given': reasons[index],
                                   'match': match, 'acted': bool(actions),
                                   'rewrite': rewrite}
         return results

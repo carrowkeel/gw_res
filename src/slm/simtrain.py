@@ -133,11 +133,13 @@ def _play_batch(model, tokenizer, config, llm_listener, step, block_size,
     stats = {'turns': 0, 'no_reason': 0, 'acted': 0,
              'match_exact': 0, 'match_fuzzy': 0, 'match_none': 0,
              'advisor_earnings': [], 'no_advisor_earnings': []}
+    gate_random = random.Random(config.project.seed + step * 100003 + 7)
     sample_turn = None
     for quarter in range(simtrain_config.quarters):
         for game in games:
             block = render.render_quarter(
-                game['state'], game['market'], game['random']
+                game['state'], game['market'], game['random'],
+                protocol_line=simtrain_config.protocol_line,
             )
             prefix = ('\n' if quarter else '') + block
             game['token_ids'].extend(tokenizer.encode(prefix))
@@ -152,10 +154,17 @@ def _play_batch(model, tokenizer, config, llm_listener, step, block_size,
             game['spans'].append((span_start, len(game['token_ids'])))
             turns.append((decision_text, game['market'], game['state']))
         if llm_listener is not None:
-            results = llm_listener.interpret_batch(turns)
+            results = llm_listener.interpret_batch(
+                turns, simtrain_config.no_reason_action_probability,
+                gate_random,
+            )
         else:
             results = [
-                listener_module.interpret(text, turn_market, turn_state)
+                listener_module.interpret(
+                    text, turn_market, turn_state,
+                    simtrain_config.no_reason_action_probability,
+                    gate_random,
+                )
                 for text, turn_market, turn_state in turns
             ]
         if sample_turn is None and turns:
@@ -364,21 +373,29 @@ def run(config):
         )
         model.train()
 
-        inputs, targets, weights = _batch_tensors(
-            games, simtrain_config, block_size, device
-        )
+        all_earnings = [
+            value for game in games for value in game['earnings']
+        ]
+        flat_signal = statistics.pstdev(all_earnings) < 1e-6
         optimizer.zero_grad(set_to_none=True)
+        game_loss = None
+        replay_loss = None
+        loss = None
+        weights = None
         with autocast:
-            logits, _ = model(inputs, targets)
-            per_token = functional.cross_entropy(
-                logits.view(-1, logits.size(-1)), targets.view(-1),
-                reduction='none',
-            ).view_as(weights)
-            game_loss = (per_token * weights).sum() / weights.sum().clamp(
-                min=1.0
-            )
-            loss = game_loss
-            replay_loss = None
+            if not flat_signal:
+                inputs, targets, weights = _batch_tensors(
+                    games, simtrain_config, block_size, device
+                )
+                logits, _ = model(inputs, targets)
+                per_token = functional.cross_entropy(
+                    logits.view(-1, logits.size(-1)), targets.view(-1),
+                    reduction='none',
+                ).view_as(weights)
+                game_loss = (per_token * weights).sum() / weights.sum().clamp(
+                    min=1.0
+                )
+                loss = game_loss
             if replay is not None:
                 replay_inputs, replay_targets = replay.get_batch(
                     max(1, int(simtrain_config.games_per_batch
@@ -386,16 +403,20 @@ def run(config):
                     device, replay_random,
                 )
                 _, replay_loss = model(replay_inputs, replay_targets)
-                loss = (
-                    (1.0 - simtrain_config.replay_fraction) * game_loss
-                    + simtrain_config.replay_fraction * replay_loss
+                if loss is None:
+                    loss = replay_loss
+                else:
+                    loss = (
+                        (1.0 - simtrain_config.replay_fraction) * game_loss
+                        + simtrain_config.replay_fraction * replay_loss
+                    )
+        if loss is not None:
+            loss.backward()
+            if simtrain_config.gradient_clip > 0:
+                torch.nn.utils.clip_grad_norm_(
+                    base_model.parameters(), simtrain_config.gradient_clip
                 )
-        loss.backward()
-        if simtrain_config.gradient_clip > 0:
-            torch.nn.utils.clip_grad_norm_(
-                base_model.parameters(), simtrain_config.gradient_clip
-            )
-        optimizer.step()
+            optimizer.step()
 
         mean_return = statistics.mean(
             sum(game['earnings']) for game in games
@@ -405,11 +426,9 @@ def run(config):
             recent_returns.pop(0)
         rolling = statistics.mean(recent_returns)
 
-        positive_weights = weights[weights > 0]
         row = {
             'step': step,
-            'loss': round(loss.item(), 4),
-            'game_loss': round(game_loss.item(), 4),
+            'flat_signal': flat_signal,
             'mean_return': round(mean_return, 2),
             'rolling_return': round(rolling, 2),
             'no_reason_rate': round(stats['no_reason'] / stats['turns'], 3),
@@ -418,11 +437,16 @@ def run(config):
                 stats['match_exact'] / stats['turns'], 3),
             'match_fuzzy_rate': round(
                 stats['match_fuzzy'] / stats['turns'], 3),
-            'weight_mean': round(positive_weights.mean().item(), 3)
-            if len(positive_weights) else 0.0,
-            'weight_max': round(positive_weights.max().item(), 3)
-            if len(positive_weights) else 0.0,
         }
+        if loss is not None:
+            row['loss'] = round(loss.item(), 4)
+        if game_loss is not None:
+            row['game_loss'] = round(game_loss.item(), 4)
+            positive_weights = weights[weights > 0]
+            row['weight_mean'] = (round(positive_weights.mean().item(), 3)
+                                  if len(positive_weights) else 0.0)
+            row['weight_max'] = (round(positive_weights.max().item(), 3)
+                                 if len(positive_weights) else 0.0)
         if replay_loss is not None:
             row['replay_loss'] = round(replay_loss.item(), 4)
         if stats['advisor_earnings']:
@@ -449,13 +473,19 @@ def run(config):
         if step % simtrain_config.log_interval == 0:
             elapsed = time.time() - interval_start
             logger.info(
-                'step %d/%d  loss %.4f  return %+.1f (rolling %+.1f, blind '
-                '%+.1f, oracle %+.1f)  no-reason %.2f  acted %.2f  '
-                '%.2fs/it',
-                step, simtrain_config.maximum_steps, loss.item(),
+                'step %d/%d  game %s  replay %s%s  return %+.1f (rolling '
+                '%+.1f, blind %+.1f, oracle %+.1f)  no-reason %.2f  acted '
+                '%.2f  match %.2f/%.2f  %.2fs/it',
+                step, simtrain_config.maximum_steps,
+                '%.3f' % game_loss.item() if game_loss is not None else '-',
+                '%.3f' % replay_loss.item() if replay_loss is not None
+                else '-',
+                '  FLAT-SIGNAL (replay-only update)' if flat_signal else '',
                 mean_return, rolling, blind_reference, oracle_reference,
                 stats['no_reason'] / stats['turns'],
                 stats['acted'] / stats['turns'],
+                stats['match_exact'] / stats['turns'],
+                stats['match_fuzzy'] / stats['turns'],
                 elapsed / max(1, simtrain_config.log_interval),
             )
             if sample_turn is not None:
@@ -484,8 +514,12 @@ def main():
     )
     parser.add_argument('--config', required=True)
     parser.add_argument('--run-id', default=None)
+    parser.add_argument('--base-run', default=None)
     arguments = parser.parse_args()
-    run(load_config(arguments.config, run_id=arguments.run_id))
+    config = load_config(arguments.config, run_id=arguments.run_id)
+    if arguments.base_run:
+        config.simtrain.base_run_dir = arguments.base_run
+    run(config)
 
 
 if __name__ == '__main__':
