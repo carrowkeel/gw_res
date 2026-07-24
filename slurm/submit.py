@@ -41,7 +41,7 @@ RUNG_STAGES = ['tokenizer', 'data', 'pretrain', 'finetune', 'evaluate']
 
 ALL_STAGES = [
     'generate', 'tokenizer', 'data', 'inspect', 'pretrain', 'sample',
-    'finetune', 'simtrain', 'evaluate',
+    'commsft', 'finetune', 'simtrain', 'evaluate',
     'graph_transform', 'graph_tokenizer', 'graph_data', 'graph_pretrain',
     'graph_evaluate',
 ]
@@ -49,7 +49,7 @@ DEFAULT_STAGES = [
     'generate', 'tokenizer', 'data', 'pretrain', 'finetune', 'evaluate',
 ]
 GPU_STAGES = {
-    'generate', 'pretrain', 'finetune', 'simtrain', 'evaluate',
+    'generate', 'pretrain', 'commsft', 'finetune', 'simtrain', 'evaluate',
     'graph_pretrain', 'graph_evaluate',
 }
 

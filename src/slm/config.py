@@ -132,6 +132,39 @@ class FinetuneConfig:
 
 
 @dataclass
+class CommSftConfig:
+    number_of_dialogues: int = 20000
+    holdout_fraction: float = 0.02
+    minimum_turns: int = 5
+    batch_size: int = 16
+    gradient_accumulation_steps: int = 2
+    epochs: int = 2
+    maximum_steps: int = None
+    learning_rate: float = 3e-5
+    minimum_learning_rate: float = 3e-6
+    warmup_ratio: float = 0.03
+    weight_decay: float = 0.0
+    gradient_clip: float = 1.0
+    dtype: str = 'bfloat16'
+    compile_model: bool = False
+    log_interval: int = 20
+    evaluation_interval: int = 200
+    maximum_sequence_length: int = 1024
+    replay_fraction: float = 0.2
+
+
+@dataclass
+class SftEvalConfig:
+    max_new_tokens: int = 64
+    temperature: float = 0.3
+    top_p: float = 0.9
+    repetition_penalty: float = 1.0
+    similarity_threshold: float = 0.4
+    maximum_examples: int = 300
+    sample_dump: int = 25
+
+
+@dataclass
 class SimTrainConfig:
     base_run_dir: str = None
     games_per_batch: int = 32
@@ -224,6 +257,8 @@ class Config:
     model: ModelConfig = field(default_factory=ModelConfig)
     pretrain: PretrainConfig = field(default_factory=PretrainConfig)
     finetune: FinetuneConfig = field(default_factory=FinetuneConfig)
+    commsft: CommSftConfig = field(default_factory=CommSftConfig)
+    sfteval: SftEvalConfig = field(default_factory=SftEvalConfig)
     simtrain: SimTrainConfig = field(default_factory=SimTrainConfig)
     eval: EvalConfig = field(default_factory=EvalConfig)
     graph: GraphConfig = field(default_factory=GraphConfig)
@@ -261,6 +296,14 @@ class Config:
         return self.out_dir / 'checkpoints' / 'sft'
 
     @property
+    def commsft_data_dir(self):
+        return self.data_dir / 'commsft'
+
+    @property
+    def commsft_dir(self):
+        return self.out_dir / 'checkpoints' / 'commsft'
+
+    @property
     def simtrain_dir(self):
         return self.out_dir / 'checkpoints' / 'simtrain'
 
@@ -292,6 +335,8 @@ _SECTION_TYPES = {
     'model': ModelConfig,
     'pretrain': PretrainConfig,
     'finetune': FinetuneConfig,
+    'commsft': CommSftConfig,
+    'sfteval': SftEvalConfig,
     'simtrain': SimTrainConfig,
     'eval': EvalConfig,
     'graph': GraphConfig,

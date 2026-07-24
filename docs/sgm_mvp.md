@@ -21,9 +21,14 @@ competence.
 - **Simulator** — the program that owns ground truth: state, dynamics, and
   per-step scores.
 
-## The three stages
+## The stages
 
-Only stage 1 has a loss that measures imitation.
+Language pretraining, two bridging SFT stages, then the simulator; real
+problems later. The simulator is an advanced stage of training — the first
+sim pilots showed that asking it to teach turn-answering, quantitative
+grounding, and outcome-driven judgment at once, under a very noisy loss,
+collapses the model instead. The bridging stages peel the first two jobs
+off so the simulator only trains the third.
 
 ### Stage 1 — language pretraining
 
@@ -48,6 +53,29 @@ generate.text_type_weights (configs/t1.yaml, dialogue-weighted 2:1); the
 grounded path stays intact as the baseline. Instruction-pair generation is
 left out of stage 1 (number_of_pairs 0, instruction_fraction 0) —
 instruction-shaped language is covered by the dialogue documents.
+
+### Bridging stages — communication SFT, then arithmetic SFT
+
+Two SFT steps between pretraining and the simulator, kept separate so the
+model's improvement on each capability is tracked on its own:
+
+- **Communication SFT** establishes coherent communication — answering
+  questions, which the base model has no concept of (it continues dialogue
+  as chitchat). Data: dialogues in the stage-1 name-and-colon turn format
+  whose last turn answers a direct question from the conversation; loss on
+  the answer turn only; stage-1 replay against forgetting. Implemented in
+  commsft.py as the commsft stage.
+- **Arithmetic SFT** teaches basic arithmetic (integer addition,
+  subtraction, comparison in the sim's numeric range), same dialogue
+  format, non-sim labels and subjects; generated programmatically with
+  exact ground truth.
+
+Each stage generates its own data inside its own stage job, never into the
+stage-1 corpus or a global generation stage. After each stage the generic
+eval module (sfteval.py) scores held-out answers by similarity — token
+overlap and containment, never format — against both the source checkpoint
+and the trained one; the same instrument thresholds entry into the
+simulator.
 
 ### Stage 2 — simulation training (the main effort)
 
