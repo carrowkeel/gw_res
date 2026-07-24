@@ -114,12 +114,12 @@ def build_rotary_cache(sequence_length, head_dimension, theta, device, dtype):
     return cosine.to(dtype), sine.to(dtype)
 
 
-def apply_rotary(tensor, cosine, sine):
+def apply_rotary(tensor, cosine, sine, offset=0):
     even = tensor[..., 0::2]
     odd = tensor[..., 1::2]
     sequence_length = tensor.size(2)
-    cosine = cosine[..., :sequence_length, :]
-    sine = sine[..., :sequence_length, :]
+    cosine = cosine[..., offset:offset + sequence_length, :]
+    sine = sine[..., offset:offset + sequence_length, :]
     rotated_even = even * cosine - odd * sine
     rotated_odd = even * sine + odd * cosine
     return torch.stack((rotated_even, rotated_odd), dim=-1).flatten(-2)
@@ -147,7 +147,16 @@ class CausalSelfAttention(nn.Module):
             config.embedding_dimension, config.embedding_dimension, bias=False
         )
 
-    def forward(self, hidden_states, cosine, sine):
+    def forward(self, hidden_states, cosine, sine, past=None, offset=0):
+        """Attend over the input, optionally continuing a decode cache.
+
+        Without past this is ordinary causal attention over the whole
+        sequence. With past, hidden_states must be a single new position:
+        its key and value are appended to the cached ones and the lone
+        query attends over everything, which is what makes incremental
+        generation cheap. Returns the output and the (pre-expansion)
+        key/value cache for the next step.
+        """
         batch, sequence_length, _ = hidden_states.shape
         queries = self.query_projection(hidden_states).view(
             batch, sequence_length, self.number_of_heads, self.head_dimension
@@ -161,8 +170,14 @@ class CausalSelfAttention(nn.Module):
             self.head_dimension,
         ).transpose(1, 2)
 
-        queries = apply_rotary(queries, cosine, sine)
-        keys = apply_rotary(keys, cosine, sine)
+        queries = apply_rotary(queries, cosine, sine, offset)
+        keys = apply_rotary(keys, cosine, sine, offset)
+
+        if past is not None:
+            past_keys, past_values = past
+            keys = torch.cat((past_keys, keys), dim=2)
+            values = torch.cat((past_values, values), dim=2)
+        new_past = (keys, values)
 
         if self.number_of_key_value_heads != self.number_of_heads:
             repeats = self.number_of_heads // self.number_of_key_value_heads
@@ -172,12 +187,12 @@ class CausalSelfAttention(nn.Module):
         attention = functional.scaled_dot_product_attention(
             queries, keys, values,
             dropout_p=self.dropout if self.training else 0.0,
-            is_causal=True,
+            is_causal=past is None,
         )
         attention = attention.transpose(1, 2).contiguous().view(
             batch, sequence_length, -1
         )
-        return self.output_projection(attention)
+        return self.output_projection(attention), new_past
 
 
 class SwiGLU(nn.Module):
@@ -210,14 +225,15 @@ class Block(nn.Module):
         self.feed_forward_norm = RMSNorm(config.embedding_dimension)
         self.feed_forward = SwiGLU(config)
 
-    def forward(self, hidden_states, cosine, sine):
-        hidden_states = hidden_states + self.attention(
-            self.attention_norm(hidden_states), cosine, sine
+    def forward(self, hidden_states, cosine, sine, past=None, offset=0):
+        attended, new_past = self.attention(
+            self.attention_norm(hidden_states), cosine, sine, past, offset
         )
+        hidden_states = hidden_states + attended
         hidden_states = hidden_states + self.feed_forward(
             self.feed_forward_norm(hidden_states)
         )
-        return hidden_states
+        return hidden_states, new_past
 
 
 class GPT(nn.Module):
@@ -278,14 +294,20 @@ class GPT(nn.Module):
             )
         return self.rotary_cache
 
-    def forward(self, input_ids, targets=None, ignore_index=-100):
+    def forward(self, input_ids, targets=None, ignore_index=-100, past=None,
+                offset=0, return_cache=False):
         _, sequence_length = input_ids.shape
         hidden_states = self.dropout(self.token_embedding(input_ids))
         cosine, sine = self._rotary(
-            sequence_length, input_ids.device, hidden_states.dtype
+            offset + sequence_length, input_ids.device, hidden_states.dtype
         )
-        for block in self.blocks:
-            hidden_states = block(hidden_states, cosine, sine)
+        new_past = []
+        for index, block in enumerate(self.blocks):
+            layer_past = past[index] if past is not None else None
+            hidden_states, layer_new = block(
+                hidden_states, cosine, sine, layer_past, offset
+            )
+            new_past.append(layer_new)
         hidden_states = self.final_norm(hidden_states)
 
         if targets is not None:
@@ -295,34 +317,90 @@ class GPT(nn.Module):
                 targets.view(-1),
                 ignore_index=ignore_index,
             )
-            return logits, loss
-        logits = self.language_model_head(hidden_states[:, [-1], :])
-        return logits, None
+            result = (logits, loss)
+        else:
+            logits = self.language_model_head(hidden_states[:, [-1], :])
+            result = (logits, None)
+        if return_cache:
+            return result + (new_past,)
+        return result
+
+    def _adjust_logits(self, logits, input_ids, top_k, top_p,
+                       repetition_penalty, repetition_window):
+        if repetition_penalty and repetition_penalty != 1.0:
+            recent = input_ids[:, -repetition_window:]
+            for row in range(input_ids.size(0)):
+                seen = torch.unique(recent[row])
+                row_logits = logits[row, seen]
+                logits[row, seen] = torch.where(
+                    row_logits > 0,
+                    row_logits / repetition_penalty,
+                    row_logits * repetition_penalty,
+                )
+        if top_k is not None:
+            values, _ = torch.topk(logits, min(top_k, logits.size(-1)))
+            logits[logits < values[:, [-1]]] = -float('inf')
+        if top_p is not None:
+            logits = filter_top_p(logits, top_p)
+        return logits
 
     @torch.no_grad()
     def generate(self, input_ids, max_new_tokens, temperature=1.0,
                  top_k=None, top_p=None, eos_id=None, repetition_penalty=1.0,
                  repetition_window=64):
+        """Sample continuations, cached when the result fits the block.
+
+        When the prompt plus the new tokens fit inside block_size, the
+        prompt is prefilled once and each new token is decoded
+        incrementally against the key/value cache. Longer requests fall
+        back to recomputing the cropped context per token, preserving the
+        old sliding-window behavior.
+        """
+        if input_ids.size(1) + max_new_tokens <= self.config.block_size:
+            return self._generate_cached(
+                input_ids, max_new_tokens, temperature, top_k, top_p,
+                eos_id, repetition_penalty, repetition_window,
+            )
+        return self._generate_recompute(
+            input_ids, max_new_tokens, temperature, top_k, top_p, eos_id,
+            repetition_penalty, repetition_window,
+        )
+
+    def _generate_cached(self, input_ids, max_new_tokens, temperature,
+                         top_k, top_p, eos_id, repetition_penalty,
+                         repetition_window):
+        logits, _, past = self(input_ids, past=None, offset=0,
+                               return_cache=True)
+        for step in range(max_new_tokens):
+            step_logits = logits[:, -1, :] / max(temperature, 1e-6)
+            step_logits = self._adjust_logits(
+                step_logits, input_ids, top_k, top_p, repetition_penalty,
+                repetition_window,
+            )
+            probabilities = functional.softmax(step_logits, dim=-1)
+            next_token = torch.multinomial(probabilities, num_samples=1)
+            input_ids = torch.cat((input_ids, next_token), dim=1)
+            if eos_id is not None and (next_token == eos_id).all():
+                break
+            if step < max_new_tokens - 1:
+                logits, _, past = self(
+                    next_token, past=past, offset=input_ids.size(1) - 1,
+                    return_cache=True,
+                )
+        return input_ids
+
+    def _generate_recompute(self, input_ids, max_new_tokens, temperature,
+                            top_k, top_p, eos_id, repetition_penalty,
+                            repetition_window):
         for _ in range(max_new_tokens):
             conditioned = input_ids[:, -self.config.block_size:]
             logits, _ = self(conditioned)
-            logits = logits[:, -1, :] / max(temperature, 1e-6)
-            if repetition_penalty and repetition_penalty != 1.0:
-                recent = input_ids[:, -repetition_window:]
-                for row in range(input_ids.size(0)):
-                    seen = torch.unique(recent[row])
-                    row_logits = logits[row, seen]
-                    logits[row, seen] = torch.where(
-                        row_logits > 0,
-                        row_logits / repetition_penalty,
-                        row_logits * repetition_penalty,
-                    )
-            if top_k is not None:
-                values, _ = torch.topk(logits, min(top_k, logits.size(-1)))
-                logits[logits < values[:, [-1]]] = -float('inf')
-            if top_p is not None:
-                logits = filter_top_p(logits, top_p)
-            probabilities = functional.softmax(logits, dim=-1)
+            step_logits = logits[:, -1, :] / max(temperature, 1e-6)
+            step_logits = self._adjust_logits(
+                step_logits, input_ids, top_k, top_p, repetition_penalty,
+                repetition_window,
+            )
+            probabilities = functional.softmax(step_logits, dim=-1)
             next_token = torch.multinomial(probabilities, num_samples=1)
             input_ids = torch.cat((input_ids, next_token), dim=1)
             if eos_id is not None and (next_token == eos_id).all():
