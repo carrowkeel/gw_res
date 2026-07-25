@@ -384,17 +384,21 @@ def build_conversation_prompt(random_generator):
     answer are extracted in a separate request afterward.
     """
     speaker_count = 2 if random_generator.random() < 0.4 else 3
-    minimum_turns = random_generator.choice([6, 8, 10])
+    lower_turns, upper_turns = random_generator.choice(
+        [(4, 6), (5, 7), (6, 8)]
+    )
     return (
-        'Write a %s conversation of at least %d turns between %d named '
-        'people who get along, on a subject of your choosing from %s. '
-        'Everyone takes part. The speakers share concrete particulars as '
-        'they talk: names, numbers, places, times, plans, or decisions, '
-        'and they stay consistent with one another. Keep it light and '
-        'cooperative, with no argument and no confusion. Give each speaker '
-        'a name and begin every turn with the name and a colon.' % (
-            random_generator.choice(QA_DIALOGUE_TONES), minimum_turns,
-            speaker_count, random_generator.choice(seeds.SUBJECT_DOMAINS),
+        'Write a %s conversation of %d to %d turns, no more, between %d '
+        'named people who get along, on a subject of your choosing from '
+        '%s. Everyone takes part. Keep each turn to one or two short '
+        'sentences. The speakers share concrete particulars as they talk: '
+        'names, numbers, places, times, plans, or decisions, and they '
+        'stay consistent with one another. Keep it light and cooperative, '
+        'with no argument and no confusion. Give each speaker a name and '
+        'begin every turn with the name and a colon.' % (
+            random_generator.choice(QA_DIALOGUE_TONES), lower_turns,
+            upper_turns, speaker_count,
+            random_generator.choice(seeds.SUBJECT_DOMAINS),
         )
     ) + _BEGIN_DIRECTLY
 

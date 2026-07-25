@@ -50,7 +50,7 @@ def _numeric(token):
         or token in NUMBER_WORDS
 
 
-RECIPE = 2
+RECIPE = 3
 
 
 def numbers_grounded(record):
@@ -98,7 +98,14 @@ def assemble_record(turns, question, answer, random_generator):
             speakers.append(speaker)
     if len(speakers) < 2:
         return None
-    question_speaker = random_generator.choice(speakers)
+    question_tokens = set(sfteval.normalize_tokens(question))
+    unnamed = [
+        speaker for speaker in speakers
+        if speaker.lower() not in question_tokens
+    ]
+    question_speaker = random_generator.choice(
+        unnamed if unnamed else speakers
+    )
     answer_speaker = random_generator.choice(
         [speaker for speaker in speakers if speaker != question_speaker]
     )
@@ -173,6 +180,13 @@ def generate_dialogues(config):
     )
     from vllm import SamplingParams
 
+    conversation_sampling = SamplingParams(
+        temperature=generate_config.temperature,
+        top_p=generate_config.top_p,
+        frequency_penalty=generate_config.frequency_penalty,
+        presence_penalty=generate_config.presence_penalty,
+        max_tokens=commsft_config.conversation_max_tokens,
+    )
     qa_sampling = SamplingParams(
         temperature=0.3, top_p=0.9, max_tokens=120,
     )
@@ -189,19 +203,25 @@ def generate_dialogues(config):
                 for _ in range(size)
             ]
             conversations = _chat(
-                engine, sampling, system_prompt, conversation_prompts
+                engine, conversation_sampling, system_prompt,
+                conversation_prompts
             )
             attempts += size
             candidates = []
             for text in conversations:
                 turns = prompts.parse_turns(text)
+                if turns is None:
+                    lines = text.strip().split('\n')[:-1]
+                    turns = prompts.parse_turns('\n'.join(lines))
                 if turns is None or len(turns) < minimum_conversation_turns:
                     continue
-                if not acceptable_text(text):
+                turns = turns[:commsft_config.maximum_turns]
+                joined = '\n'.join('%s: %s' % turn for turn in turns)
+                if not acceptable_text(joined):
                     continue
                 if len({speaker for speaker, _ in turns}) < 2:
                     continue
-                if generate_config.apply_filter and not filters.passes(text):
+                if generate_config.apply_filter and not filters.passes(joined):
                     continue
                 candidates.append(turns)
             if not candidates:

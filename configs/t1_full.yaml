@@ -58,6 +58,8 @@ commsft:
   number_of_dialogues: 20000
   holdout_fraction: 0.02
   minimum_turns: 5
+  maximum_turns: 8
+  conversation_max_tokens: 360
   batch_size: 16
   gradient_accumulation_steps: 2
   epochs: 2
