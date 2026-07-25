@@ -54,6 +54,22 @@ grounded path stays intact as the baseline. Instruction-pair generation is
 left out of stage 1 (number_of_pairs 0, instruction_fraction 0) —
 instruction-shaped language is covered by the dialogue documents.
 
+The tokenizer splits digits individually before BPE, so every number is a
+sequence of single-digit tokens and the same digit always maps to the same
+token id. Left to frequency, byte-level BPE learns merged number chunks
+(' 15', ' 197') plus a second space-prefixed digit alphabet, so
+same-magnitude numbers tokenize inconsistently and there is no stable
+place-value structure for arithmetic to build on — diagnosed as a ceiling
+on the arithmetic SFT. The build refuses to save a tokenizer whose
+vocabulary contains a multi-digit token or that fails to round-trip text
+with numbers, and `python -m slm.tokenizer --check <tokenizer.json>`
+verifies a saved artifact. Because a checkpoint's embeddings are only
+meaningful under the vocabulary they were trained with, every stage
+records the tokenizer's fingerprint: packed data carries it in meta.json,
+checkpoints carry it in their payload, and every load or resume refuses a
+mismatch instead of silently training on a mismatched vocabulary (the
+hazard of rerunning stages into an existing run tree).
+
 ### Bridging stages — communication SFT, then arithmetic SFT
 
 Two SFT steps between pretraining and the simulator, kept separate so the

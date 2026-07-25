@@ -6,7 +6,7 @@ amplify, and score-weighted self-imitation of chatter collapses it. The
 gate plays frozen probe games (no updates, no listener LLM) and measures
 the genuine actionable rate: the fraction of trader turns the pattern
 parser can act on from the raw text alone, with no reason gate and no
-charitable rewriting — the charity that inflated acted rates in the failed
+charitable rewriting - the charity that inflated acted rates in the failed
 pilot is deliberately excluded from the measurement. The simulator refuses
 to start below simtrain.entry_threshold; the module also runs standalone
 after any stage to measure where a checkpoint stands.
@@ -22,7 +22,7 @@ from . import listener as listener_module
 from . import market, render
 from .config import load_config
 from .model import GPT, build_config
-from .sftstage import resolve_base_checkpoint
+from .sftstage import resolve_base_checkpoint, verify_checkpoint_tokenizer
 from .tokenizer import SyntheticTokenizer
 from .utils import ensure_directory, get_logger, normalize_state_dict
 
@@ -172,6 +172,7 @@ def run(config, checkpoint_path=None):
     )
     tokenizer = SyntheticTokenizer(tokenizer_path)
     saved = torch.load(checkpoint_path, map_location=device)
+    verify_checkpoint_tokenizer(saved, checkpoint_path, tokenizer_path)
     gpt_config = build_config(config.model, saved['vocabulary_size'])
     model = GPT(gpt_config).to(device)
     model.load_state_dict(normalize_state_dict(saved['model']))

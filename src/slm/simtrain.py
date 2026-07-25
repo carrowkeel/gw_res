@@ -35,7 +35,8 @@ from . import market, render
 from .config import load_config, to_dict
 from .model import GPT, build_config
 from .pretrain import learning_rate_at
-from .tokenizer import SyntheticTokenizer
+from .sftstage import verify_checkpoint_tokenizer
+from .tokenizer import SyntheticTokenizer, fingerprint as tokenizer_fingerprint
 from .utils import ensure_directory, get_logger, normalize_state_dict, set_seed
 
 logger = get_logger('simtrain')
@@ -321,6 +322,9 @@ def run(config):
     checkpoint = None
     if paths['checkpoint'] is not None and paths['checkpoint'].exists():
         checkpoint = torch.load(paths['checkpoint'], map_location=device)
+        verify_checkpoint_tokenizer(
+            checkpoint, paths['checkpoint'], paths['tokenizer']
+        )
         vocabulary_size = checkpoint['vocabulary_size']
         logger.info('starting from stage-1 checkpoint %s',
                     paths['checkpoint'])
@@ -394,6 +398,9 @@ def run(config):
     last_checkpoint = checkpoint_directory / 'ckpt_last.pt'
     if last_checkpoint.exists():
         saved = torch.load(last_checkpoint, map_location=device)
+        verify_checkpoint_tokenizer(
+            saved, last_checkpoint, paths['tokenizer']
+        )
         base_model.load_state_dict(normalize_state_dict(saved['model']))
         optimizer.load_state_dict(saved['optimizer'])
         start_step = saved['step'] + 1
@@ -425,6 +432,9 @@ def run(config):
             'mean_return': mean_return,
             'model_config': to_dict(config.model),
             'vocabulary_size': vocabulary_size,
+            'tokenizer_fingerprint': tokenizer_fingerprint(
+                paths['tokenizer']
+            ),
         }
         torch.save(payload, checkpoint_directory / ('%s.pt' % tag))
 
@@ -515,7 +525,7 @@ def run(config):
                 raise SystemExit(
                     'aborting: %d consecutive steps without actionable '
                     'signal (no executed trades with earnings variance); '
-                    'the model is not engaging the market — check '
+                    'the model is not engaging the market - check '
                     'gate_report.json, the bridging stages, and the entry '
                     'difficulty before rerunning' % no_signal_streak
                 )

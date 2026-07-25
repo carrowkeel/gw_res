@@ -207,7 +207,8 @@ def evaluate_checkpoint(config, checkpoint_path, records, output_path,
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     tokenizer = SyntheticTokenizer(config.tokenizer_path)
     model, gpt_config = load_checkpoint_model(
-        config, checkpoint_path, device
+        config, checkpoint_path, device,
+        tokenizer_path=config.tokenizer_path,
     )
     model.eval()
     report, rows = evaluate_model(
