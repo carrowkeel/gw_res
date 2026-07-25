@@ -104,7 +104,14 @@ model's improvement on each capability is tracked on its own:
   stage-1 replay, and the retention evaluation (the commsft holdout
   scored with the mathsft checkpoint) measures the outcome. Because
   arithmetic generation is free, volume trades epochs for unique pairs:
-  more dialogues, one pass, no repetition.
+  more dialogues, one pass, no repetition. The first fixed-tokenizer run
+  ended with the numeric validation loss still falling and near-miss
+  errors (right magnitude, wrong digits), so the stage trains 4x longer
+  on 4x unique data; the eval's by_result_digits breakdown (numeric
+  accuracy per kind by digit count of the reference result) is the
+  instrument that says whether longer training is forming digit-level
+  circuits or stalling at the carry boundary, which is what separates
+  more-of-the-same from the curriculum and worked-steps interventions.
 
 Each stage generates its own data inside its own stage job, never into the
 stage-1 corpus or a global generation stage. After each stage the generic

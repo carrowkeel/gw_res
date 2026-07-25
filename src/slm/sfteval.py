@@ -6,7 +6,9 @@ overlap and containment), never by format, the same forgiving principle as
 the listener and the earlier eval. The report carries the answered rate, so
 the same module both tracks a stage's improvement over its source
 checkpoint and serves as the threshold instrument for entering the
-simulator.
+simulator. Numeric accuracy is additionally broken down per kind by the
+digit count of the largest reference number (by_result_digits), the axis
+that separates single-digit facts from carrying.
 
     python -m slm.sfteval --config <resolved.yaml> --checkpoint <ckpt.pt> \
       --records <holdout.jsonl> --output <report.json>
@@ -126,6 +128,7 @@ def evaluate_model(model, tokenizer, records, sfteval_config, block_size,
         )
         answered_count += int(answered)
         f1_total += f1
+        reference_values = numeric_values(record['response'])
         rows.append({
             'question': record.get('question'),
             'kind': record.get('kind'),
@@ -135,6 +138,9 @@ def evaluate_model(model, tokenizer, records, sfteval_config, block_size,
             'answered': answered,
             'numbers_correct': numbers_correct(
                 prediction, record['response']
+            ),
+            'result_digits': (
+                len(str(max(reference_values))) if reference_values else None
             ),
         })
     report = {
@@ -167,25 +173,39 @@ def evaluate_model(model, tokenizer, records, sfteval_config, block_size,
     for row in rows:
         if row['kind'] is None:
             continue
-        entry = kinds.setdefault(row['kind'], [0, 0, 0.0, 0, 0])
-        entry[0] += 1
-        entry[1] += int(row['answered'])
-        entry[2] += row['f1']
+        entry = kinds.setdefault(row['kind'], {
+            'count': 0, 'answered': 0, 'f1_sum': 0.0,
+            'numeric': 0, 'correct': 0, 'digits': {},
+        })
+        entry['count'] += 1
+        entry['answered'] += int(row['answered'])
+        entry['f1_sum'] += row['f1']
         if row['numbers_correct'] is not None:
-            entry[3] += 1
-            entry[4] += int(row['numbers_correct'])
+            entry['numeric'] += 1
+            entry['correct'] += int(row['numbers_correct'])
+            bucket = entry['digits'].setdefault(row['result_digits'], [0, 0])
+            bucket[0] += 1
+            bucket[1] += int(row['numbers_correct'])
     if kinds:
         report['by_kind'] = {}
-        for kind, (count, answered, f1_sum, numeric,
-                   correct) in sorted(kinds.items()):
-            entry = {
-                'examples': count,
-                'answered_rate': round(answered / count, 4),
-                'mean_f1': round(f1_sum / count, 4),
+        for kind, entry in sorted(kinds.items()):
+            summary = {
+                'examples': entry['count'],
+                'answered_rate': round(entry['answered'] / entry['count'], 4),
+                'mean_f1': round(entry['f1_sum'] / entry['count'], 4),
             }
-            if numeric:
-                entry['numbers_correct_rate'] = round(correct / numeric, 4)
-            report['by_kind'][kind] = entry
+            if entry['numeric']:
+                summary['numbers_correct_rate'] = round(
+                    entry['correct'] / entry['numeric'], 4
+                )
+                summary['by_result_digits'] = {
+                    str(digits): {
+                        'examples': bucket[0],
+                        'numbers_correct_rate': round(bucket[1] / bucket[0], 4),
+                    }
+                    for digits, bucket in sorted(entry['digits'].items())
+                }
+            report['by_kind'][kind] = summary
     return report, rows
 
 
