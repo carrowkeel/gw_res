@@ -2,7 +2,7 @@
 
 Runs after each SFT stage: the model generates its answer for each held-out
 prompt and the answer is scored against the reference by similarity (token
-overlap and containment), never by format — the same forgiving principle as
+overlap and containment), never by format, the same forgiving principle as
 the listener and the earlier eval. The report carries the answered rate, so
 the same module both tracks a stage's improvement over its source
 checkpoint and serves as the threshold instrument for entering the
@@ -46,6 +46,27 @@ def token_f1(prediction, reference):
     precision = common / len(prediction_tokens)
     recall = common / len(reference_tokens)
     return 2 * precision * recall / (precision + recall)
+
+
+_DIGIT_PATTERN = re.compile(r'\d+')
+
+
+def numeric_values(text):
+    return [int(found) for found in _DIGIT_PATTERN.findall(text)]
+
+
+def numbers_correct(prediction, reference):
+    """Exact numeric correctness; None when the reference carries no digits.
+
+    Similarity scoring rewards the answer template even when the number in
+    it is wrong, so for numeric answers the numbers themselves are checked
+    exactly: every number in the reference must appear in the prediction.
+    """
+    reference_values = numeric_values(reference)
+    if not reference_values:
+        return None
+    prediction_values = numeric_values(prediction)
+    return all(value in prediction_values for value in reference_values)
 
 
 def repeated_bigram_rate(text):
@@ -112,6 +133,9 @@ def evaluate_model(model, tokenizer, records, sfteval_config, block_size,
             'prediction': prediction,
             'f1': round(f1, 3),
             'answered': answered,
+            'numbers_correct': numbers_correct(
+                prediction, record['response']
+            ),
         })
     report = {
         'examples': len(records),
@@ -130,23 +154,38 @@ def evaluate_model(model, tokenizer, records, sfteval_config, block_size,
             sum(repeated_bigram_rate(text) for text in predictions)
             / len(predictions), 4
         )
+    numeric_rows = [
+        row for row in rows if row['numbers_correct'] is not None
+    ]
+    if numeric_rows:
+        report['numeric_examples'] = len(numeric_rows)
+        report['numbers_correct_rate'] = round(
+            sum(row['numbers_correct'] for row in numeric_rows)
+            / len(numeric_rows), 4
+        )
     kinds = {}
     for row in rows:
         if row['kind'] is None:
             continue
-        entry = kinds.setdefault(row['kind'], [0, 0, 0.0])
+        entry = kinds.setdefault(row['kind'], [0, 0, 0.0, 0, 0])
         entry[0] += 1
         entry[1] += int(row['answered'])
         entry[2] += row['f1']
+        if row['numbers_correct'] is not None:
+            entry[3] += 1
+            entry[4] += int(row['numbers_correct'])
     if kinds:
-        report['by_kind'] = {
-            kind: {
+        report['by_kind'] = {}
+        for kind, (count, answered, f1_sum, numeric,
+                   correct) in sorted(kinds.items()):
+            entry = {
                 'examples': count,
                 'answered_rate': round(answered / count, 4),
                 'mean_f1': round(f1_sum / count, 4),
             }
-            for kind, (count, answered, f1_sum) in sorted(kinds.items())
-        }
+            if numeric:
+                entry['numbers_correct_rate'] = round(correct / numeric, 4)
+            report['by_kind'][kind] = entry
     return report, rows
 
 
@@ -184,9 +223,11 @@ def evaluate_checkpoint(config, checkpoint_path, records, output_path,
         for row in rows[:config.sfteval.sample_dump]:
             handle.write(json.dumps(row, ensure_ascii=False) + '\n')
     logger.info(
-        '%s: answered %.3f, mean f1 %.3f, distinct %.3f, repeated bigrams '
-        '%.3f over %d examples -> %s',
+        '%s: answered %.3f, mean f1 %.3f, numbers %s, distinct %.3f, '
+        'repeated bigrams %.3f over %d examples -> %s',
         label, report['answered_rate'], report['mean_f1'],
+        '%.3f' % report['numbers_correct_rate']
+        if 'numbers_correct_rate' in report else '-',
         report.get('distinct_prediction_rate', 0.0),
         report.get('repeated_bigram_rate', 0.0),
         report['examples'], output_path,

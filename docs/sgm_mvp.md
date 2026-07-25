@@ -79,7 +79,16 @@ model's improvement on each capability is tracked on its own:
   format, non-sim labels and subjects; generated programmatically with
   exact ground truth. Implemented in mathsft.py as the mathsft stage,
   starting from the communication checkpoint; its eval report breaks the
-  answered rate down by operation kind.
+  answered rate down by operation kind. The arithmetic stage is an
+  advanced version of the communication stage and must build on it, not
+  erode it: the first run showed stage-1 replay protecting the
+  pretraining distribution perfectly while the communication answered
+  rate fell from 0.86 to 0.54, so rehearsal is cumulative — mathsft
+  batches mix communication dialogues at communication_fraction alongside
+  stage-1 replay, and the retention evaluation (the commsft holdout
+  scored with the mathsft checkpoint) measures the outcome. Because
+  arithmetic generation is free, volume trades epochs for unique pairs:
+  more dialogues, one pass, no repetition.
 
 Each stage generates its own data inside its own stage job, never into the
 stage-1 corpus or a global generation stage. After each stage the generic
@@ -91,7 +100,17 @@ stage-1 replay validation loss is measured before, during, and after
 training (upward drift is the forgetting warning), and the eval reports
 carry repetition warning metrics (distinct-prediction rate, repeated-bigram
 rate) so the loop signature that collapsed the sim pilots is visible here
-too.
+too. For numeric answers, similarity scoring rewards the answer template
+even when the number is wrong (the first mathsft run scored 1.0 answered
+with mostly wrong numbers), so the eval also reports numbers_correct_rate,
+exact numeric match, overall and per kind; that is the real measure of
+arithmetic. The training loss is coupled to the same accuracy: mean
+cross-entropy over the answer is dominated by template tokens (the first
+run reached 0.396 validation loss with wrong numbers), so digit-bearing
+answer tokens are upweighted (numeric_token_weight), validation uses the
+same weighted objective for best-checkpoint selection, and a numeric-only
+validation loss is logged so the accuracy signal is visible during
+training, not only at eval.
 
 ### Stage 2 — simulation training (the main effort)
 

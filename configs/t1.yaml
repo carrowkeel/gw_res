@@ -71,12 +71,14 @@ commsft:
   log_interval: 20
 
 mathsft:
-  number_of_dialogues: 4000
+  number_of_dialogues: 12000
   holdout_fraction: 0.05
   maximum_value: 1000
+  communication_fraction: 0.3
+  numeric_token_weight: 5.0
   batch_size: 16
   gradient_accumulation_steps: 2
-  epochs: 2
+  epochs: 1
   learning_rate: 0.00003
   minimum_learning_rate: 0.000003
   warmup_ratio: 0.03
