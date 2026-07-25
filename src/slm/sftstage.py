@@ -179,12 +179,16 @@ def _mean_loss(model, dataset, indices, batch_size, device, autocast):
 
 def train_stage(config, stage_config, tokenizer, train_records,
                 validation_records, source_checkpoint, checkpoint_directory,
-                name):
+                name, rehearsal_records=None, rehearsal_fraction=0.0):
     """Train one SFT stage from a source checkpoint; return the best checkpoint.
 
     Best selection is by held-out loss when validation records exist,
     otherwise the final checkpoint stands. History lands in the stage's
-    checkpoint directory, one row per evaluation.
+    checkpoint directory, one row per evaluation. rehearsal_records mixes
+    a prior stage's own data into batches at rehearsal_fraction: stage-1
+    replay protects the pretraining distribution but says nothing about a
+    prior stage's behavior, so each stage rehearses the stages before it
+    rather than overwriting them.
     """
     import torch
     from contextlib import nullcontext
@@ -203,6 +207,12 @@ def train_stage(config, stage_config, tokenizer, train_records,
     if validation_records:
         validation = PlainPairDataset(
             validation_records, tokenizer,
+            stage_config.maximum_sequence_length,
+        )
+    rehearsal = None
+    if rehearsal_records and rehearsal_fraction > 0.0:
+        rehearsal = PlainPairDataset(
+            rehearsal_records, tokenizer,
             stage_config.maximum_sequence_length,
         )
 
@@ -240,10 +250,12 @@ def train_stage(config, stage_config, tokenizer, train_records,
     )
     warmup_steps = max(1, int(total_steps * stage_config.warmup_ratio))
     logger.info(
-        '%s: %d train, %d val examples, %d steps, replay %.2f',
+        '%s: %d train, %d val examples, %d steps, replay %.2f, '
+        'rehearsal %d at %.2f',
         name, dataset.length(),
         validation.length() if validation else 0,
         total_steps, stage_config.replay_fraction,
+        rehearsal.length() if rehearsal else 0, rehearsal_fraction,
     )
 
     def learning_rate_at(step):
@@ -309,6 +321,7 @@ def train_stage(config, stage_config, tokenizer, train_records,
     step = 0
     step_loss = 0.0
     replay_loss_value = None
+    rehearsal_loss_value = None
     model.train()
     for step in range(total_steps):
         current_learning_rate = learning_rate_at(step)
@@ -317,25 +330,35 @@ def train_stage(config, stage_config, tokenizer, train_records,
         optimizer.zero_grad(set_to_none=True)
         step_loss = 0.0
         for _ in range(stage_config.gradient_accumulation_steps):
-            if replay is not None and (
-                replay_generator.random() < stage_config.replay_fraction
-            ):
+            draw = replay_generator.random()
+            source = 'stage'
+            if replay is not None and draw < stage_config.replay_fraction:
                 inputs, labels = replay.get_batch(
                     stage_config.batch_size, device, replay_generator
                 )
-                is_replay = True
+                source = 'replay'
+            elif rehearsal is not None and draw < (
+                    stage_config.replay_fraction + rehearsal_fraction):
+                chosen = replay_generator.integers(
+                    0, rehearsal.length(), size=stage_config.batch_size
+                ).tolist()
+                inputs, labels = rehearsal.collate(chosen, device)
+                source = 'rehearsal'
             else:
                 inputs, labels = dataset.collate(
                     next_indices(stage_config.batch_size), device
                 )
-                is_replay = False
             with autocast:
                 _, loss = model(inputs, labels)
                 loss = loss / stage_config.gradient_accumulation_steps
             loss.backward()
             step_loss += loss.item()
-            if is_replay:
+            if source == 'replay':
                 replay_loss_value = (
+                    loss.item() * stage_config.gradient_accumulation_steps
+                )
+            elif source == 'rehearsal':
+                rehearsal_loss_value = (
                     loss.item() * stage_config.gradient_accumulation_steps
                 )
         if stage_config.gradient_clip > 0:
@@ -346,10 +369,12 @@ def train_stage(config, stage_config, tokenizer, train_records,
 
         if step % stage_config.log_interval == 0:
             logger.info(
-                '%s step %d/%d  loss %.4f  replay %s  lr %.2e',
+                '%s step %d/%d  loss %.4f  replay %s  rehearsal %s  lr %.2e',
                 name, step, total_steps, step_loss,
                 '%.4f' % replay_loss_value
                 if replay_loss_value is not None else '-',
+                '%.4f' % rehearsal_loss_value
+                if rehearsal_loss_value is not None else '-',
                 current_learning_rate,
             )
         if (validation is not None and stage_config.evaluation_interval > 0
@@ -373,6 +398,10 @@ def train_stage(config, stage_config, tokenizer, train_records,
                     'replay_loss': (
                         round(replay_loss_value, 4)
                         if replay_loss_value is not None else None
+                    ),
+                    'rehearsal_loss': (
+                        round(rehearsal_loss_value, 4)
+                        if rehearsal_loss_value is not None else None
                     ),
                     'replay_validation_loss': (
                         round(replay_validation_value, 4)

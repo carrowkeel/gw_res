@@ -32,6 +32,7 @@ logger = get_logger('mathsft')
 ITEMS = [
     'crates', 'sacks', 'tickets', 'chairs', 'lamps', 'bricks', 'jars',
     'barrels', 'planks', 'baskets', 'bolts of cloth', 'reams of paper',
+    'candles', 'kettles', 'stools', 'coils of rope',
 ]
 
 ADJECTIVE_PAIRS = [
@@ -45,6 +46,8 @@ FILLERS = [
     'Good, the buyer arrives tomorrow.',
     'I thought it would be more.',
     'The tally took most of the morning.',
+    'We should note it in the book before we forget.',
+    'The counting frame made short work of it.',
 ]
 
 ADDITION_SCENARIOS = [
@@ -60,6 +63,14 @@ ADDITION_SCENARIOS = [
      'And %d more after noon.',
      'How many %s did you sell today?',
      'I sold %d %s today.'),
+    ('The morning shift packed %d %s.',
+     'The evening shift packed %d more.',
+     'How many %s did the two shifts pack?',
+     'The two shifts packed %d %s.'),
+    ('We shipped %d %s on Monday.',
+     'Another %d went out on Tuesday.',
+     'How many %s went out over the two days?',
+     'Over the two days %d %s went out.'),
 ]
 
 SUBTRACTION_SCENARIOS = [
@@ -71,12 +82,20 @@ SUBTRACTION_SCENARIOS = [
      'By Friday %d of them had been sold.',
      'How many %s remain?',
      'There are %d %s remaining.'),
+    ('The yard held %d %s at dawn.',
+     'By evening %d had been carted away.',
+     'How many %s are still in the yard?',
+     'There are %d %s still in the yard.'),
 ]
 
 CHANGE_SCENARIOS = [
     ('The price of a %s stood at %d last month.',
      'It stands at %d now.',
      'By how much did the price of a %s change?',
+     'It changed by %d.'),
+    ('A %s sold for %d at the spring fair.',
+     'At the autumn fair it went for %d.',
+     'By how much did the price of a %s change between the fairs?',
      'It changed by %d.'),
 ]
 
@@ -89,12 +108,20 @@ DIFFERENCE_SCENARIOS = [
      'The stall across the way took %d.',
      'How many more orders for %s did our stall take?',
      'Our stall took %d more orders for %s.'),
+    ('The east shelf holds %d %s.',
+     'The west shelf holds %d.',
+     'How many more %s does the east shelf hold?',
+     'The east shelf holds %d more %s.'),
 ]
 
 COMPARISON_SCENARIOS = [
     ('The %s %s cost %d each.',
      'The %s %s cost %d each.',
      'Which %s cost less?',
+     'The %s %s, at %d against %d.'),
+    ('The %s %s sell for %d apiece.',
+     'The %s %s sell for %d apiece.',
+     'Which %s are cheaper?',
      'The %s %s, at %d against %d.'),
 ]
 
@@ -150,7 +177,9 @@ def _subtraction(random_generator, maximum_value):
 def _change(random_generator, maximum_value):
     first, second = _pair(random_generator, maximum_value, distinct=True)
     item = random_generator.choice(ITEMS).rstrip('s')
-    statement_one, statement_two, question, answer = CHANGE_SCENARIOS[0]
+    statement_one, statement_two, question, answer = (
+        random_generator.choice(CHANGE_SCENARIOS)
+    )
     return (
         statement_one % (item, first),
         statement_two % second,
@@ -179,7 +208,9 @@ def _comparison(random_generator, maximum_value):
     first, second = _pair(random_generator, maximum_value, distinct=True)
     item = random_generator.choice(ITEMS)
     adjective_a, adjective_b = random_generator.choice(ADJECTIVE_PAIRS)
-    statement_one, statement_two, question, answer = COMPARISON_SCENARIOS[0]
+    statement_one, statement_two, question, answer = (
+        random_generator.choice(COMPARISON_SCENARIOS)
+    )
     cheaper_adjective = adjective_a if first < second else adjective_b
     cheaper, dearer = min(first, second), max(first, second)
     return (
@@ -296,10 +327,29 @@ def run(config):
         checkpoint_directory / 'eval_baseline.json', 'mathsft-baseline',
     )
 
+    rehearsal_records = None
+    communication_path = config.commsft_data_dir / 'train.jsonl'
+    if config.mathsft.communication_fraction > 0.0:
+        if communication_path.exists():
+            rehearsal_records = sfteval.load_records(communication_path)
+            logger.info(
+                'rehearsing %d communication dialogues at fraction %.2f',
+                len(rehearsal_records),
+                config.mathsft.communication_fraction,
+            )
+        else:
+            logger.warning(
+                'no communication train data at %s; arithmetic will train '
+                'without rehearsal and may erode the communication skill',
+                communication_path,
+            )
+
     tokenizer = SyntheticTokenizer(config.tokenizer_path)
     best_checkpoint = sftstage.train_stage(
         config, config.mathsft, tokenizer, train, holdout,
         source_checkpoint, checkpoint_directory, 'mathsft',
+        rehearsal_records=rehearsal_records,
+        rehearsal_fraction=config.mathsft.communication_fraction,
     )
 
     report = sfteval.evaluate_checkpoint(
