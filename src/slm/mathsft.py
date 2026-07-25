@@ -310,6 +310,24 @@ def run(config):
         'arithmetic SFT: answered rate %.3f -> %.3f (baseline -> trained)',
         baseline['answered_rate'], report['answered_rate'],
     )
+
+    retention_path = config.commsft_data_dir / 'holdout.jsonl'
+    if retention_path.exists():
+        retention = sfteval.evaluate_checkpoint(
+            config, best_checkpoint, sfteval.load_records(retention_path),
+            checkpoint_directory / 'eval_retention.json',
+            'commsft-retention',
+        )
+        logger.info(
+            'communication retention after arithmetic SFT: answered rate '
+            '%.3f (compare commsft eval_report.json; a large drop is the '
+            'capacity-pressure signal)', retention['answered_rate'],
+        )
+    else:
+        logger.warning(
+            'no commsft holdout at %s, skipping the retention evaluation',
+            retention_path,
+        )
     return best_checkpoint
 
 
