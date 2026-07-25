@@ -45,6 +45,29 @@ def learning_rate_at(step, pretrain_config):
     )
 
 
+def resolve_accumulation_steps(pretrain_config, world_size):
+    """Return the per-rank accumulation steps for this world size.
+
+    When effective_batch_size is set, the config states the invariant (the
+    total sequences per optimizer step) and the per-rank accumulation is
+    derived from it, so the number of GPUs changes wall-clock time but not
+    the optimizer trajectory or the token budget. Without it, the legacy
+    semantics apply: gradient_accumulation_steps is per-rank and the
+    effective batch silently scales with the world size.
+    """
+    if not pretrain_config.effective_batch_size:
+        return pretrain_config.gradient_accumulation_steps
+    per_pass = pretrain_config.batch_size * world_size
+    if pretrain_config.effective_batch_size % per_pass:
+        raise SystemExit(
+            'effective_batch_size %d is not divisible by batch_size %d x '
+            'world size %d; adjust batch_size or the GPU count'
+            % (pretrain_config.effective_batch_size,
+               pretrain_config.batch_size, world_size)
+        )
+    return pretrain_config.effective_batch_size // per_pass
+
+
 def _setup_device():
     import torch
     import torch.distributed as distributed
@@ -93,6 +116,9 @@ def run(config, packed_directory=None, checkpoint_root=None):
 
     gpt_config = build_config(config.model, vocabulary_size)
     model = GPT(gpt_config).to(device)
+    accumulation_steps = resolve_accumulation_steps(
+        pretrain_config, get_world_size()
+    )
     if is_main_process():
         non_embedding = model.count_parameters(non_embedding=True)
         train_tokens = meta.get('train_tokens', 0)
@@ -103,8 +129,25 @@ def run(config, packed_directory=None, checkpoint_root=None):
             config.model.preset,
         )
         logger.info(
-            'train tokens %d, tokens per non-embedding parameter %.1f',
+            'corpus %d train tokens, %.1f per non-embedding parameter',
             train_tokens, ratio,
+        )
+        sequences_per_step = (
+            pretrain_config.batch_size * accumulation_steps
+            * get_world_size()
+        )
+        tokens_per_step = sequences_per_step * gpt_config.block_size
+        planned_tokens = tokens_per_step * pretrain_config.maximum_steps
+        logger.info(
+            'world size %d: %d sequences per step (%d per rank x %d '
+            'accumulation), %d tokens per step, %d steps -> %.2fB tokens '
+            'processed (%.1f epochs, %.1f per non-embedding parameter)',
+            get_world_size(), sequences_per_step,
+            pretrain_config.batch_size, accumulation_steps,
+            tokens_per_step, pretrain_config.maximum_steps,
+            planned_tokens / 1e9,
+            planned_tokens / train_tokens if train_tokens else 0.0,
+            planned_tokens / non_embedding if non_embedding else 0.0,
         )
 
     precision = {
@@ -226,18 +269,17 @@ def run(config, packed_directory=None, checkpoint_root=None):
 
         optimizer.zero_grad(set_to_none=True)
         accumulated_loss = 0.0
-        for micro_step in range(pretrain_config.gradient_accumulation_steps):
+        for micro_step in range(accumulation_steps):
             inputs, targets = train_dataset.get_batch(
                 pretrain_config.batch_size, device, random_generator
             )
             if is_distributed():
                 model.require_backward_grad_sync = (
-                    micro_step
-                    == pretrain_config.gradient_accumulation_steps - 1
+                    micro_step == accumulation_steps - 1
                 )
             with autocast:
                 _, loss = model(inputs, targets)
-                loss = loss / pretrain_config.gradient_accumulation_steps
+                loss = loss / accumulation_steps
             scaler.scale(loss).backward()
             accumulated_loss += loss.item()
         if pretrain_config.gradient_clip > 0:

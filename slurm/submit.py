@@ -61,9 +61,14 @@ CACHE_VARIABLES = [
 
 
 def _gpu_count(gres):
+    """Count GPUs from an explicit :N suffix only.
+
+    Trailing digits inside a type name must not count: a bare 'gpu:l4'
+    means one L4, not four GPUs.
+    """
     if not gres:
         return 0
-    match = re.search(r'(\d+)\s*$', gres)
+    match = re.search(r':(\d+)\s*$', gres)
     return int(match.group(1)) if match else 1
 
 
