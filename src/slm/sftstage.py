@@ -15,6 +15,7 @@ import numpy
 
 from .config import to_dict
 from .model import GPT, build_config
+from .tokenizer import fingerprint as tokenizer_fingerprint
 from .utils import get_logger, normalize_state_dict
 
 logger = get_logger('sftstage')
@@ -51,10 +52,38 @@ def resolve_base_checkpoint(base_directory):
     return None
 
 
-def load_checkpoint_model(config, checkpoint_path, device):
+def verify_checkpoint_tokenizer(saved, checkpoint_path, tokenizer_path):
+    """Refuse a checkpoint whose tokenizer differs from the given artifact.
+
+    A checkpoint's embeddings only mean anything under the vocabulary they
+    were trained with, so training or evaluating it against a different
+    tokenizer produces silent garbage. Checkpoints written before
+    fingerprinting carry no fingerprint and only draw a warning.
+    """
+    saved_fingerprint = saved.get('tokenizer_fingerprint')
+    if saved_fingerprint is None:
+        logger.warning(
+            'checkpoint %s predates tokenizer fingerprinting; cannot verify '
+            'it matches %s', checkpoint_path, tokenizer_path,
+        )
+        return
+    current_fingerprint = tokenizer_fingerprint(tokenizer_path)
+    if saved_fingerprint != current_fingerprint:
+        raise SystemExit(
+            'checkpoint %s was trained with tokenizer fingerprint %s but %s '
+            'has fingerprint %s; the checkpoint is stale, retrain the stage '
+            'chain from the current tokenizer'
+            % (checkpoint_path, saved_fingerprint, tokenizer_path,
+               current_fingerprint)
+        )
+
+
+def load_checkpoint_model(config, checkpoint_path, device, tokenizer_path=None):
     import torch
 
     saved = torch.load(checkpoint_path, map_location=device)
+    if tokenizer_path is not None:
+        verify_checkpoint_tokenizer(saved, checkpoint_path, tokenizer_path)
     gpt_config = build_config(config.model, saved['vocabulary_size'])
     model = GPT(gpt_config).to(device)
     model.load_state_dict(normalize_state_dict(saved['model']))
@@ -257,8 +286,10 @@ def train_stage(config, stage_config, tokenizer, train_records,
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     device_type = 'cuda' if device == 'cuda' else 'cpu'
     model, gpt_config = load_checkpoint_model(
-        config, source_checkpoint, device
+        config, source_checkpoint, device,
+        tokenizer_path=config.tokenizer_path,
     )
+    stage_fingerprint = tokenizer_fingerprint(config.tokenizer_path)
     logger.info('%s: starting from %s', name, source_checkpoint)
 
     numeric_token_weight = stage_config.numeric_token_weight
@@ -356,6 +387,7 @@ def train_stage(config, stage_config, tokenizer, train_records,
                 'validation_loss': validation_loss,
                 'model_config': to_dict(config.model),
                 'vocabulary_size': gpt_config.vocabulary_size,
+                'tokenizer_fingerprint': stage_fingerprint,
             },
             checkpoint_directory / filename,
         )

@@ -16,6 +16,7 @@ that violates it.
 """
 
 import argparse
+import hashlib
 import json
 import re
 
@@ -39,6 +40,17 @@ def multi_digit_tokens(tokenizer):
         token for token in tokenizer.get_vocab()
         if _MULTI_DIGIT.search(token)
     )
+
+
+def fingerprint(path):
+    """Return a short digest identifying a saved tokenizer artifact.
+
+    Packed data and checkpoints record the fingerprint of the tokenizer
+    they were built with, so a stage can refuse artifacts from a different
+    tokenizer instead of silently training on a mismatched vocabulary.
+    """
+    with open(path, 'rb') as handle:
+        return hashlib.sha256(handle.read()).hexdigest()[:16]
 
 
 def iterate_corpus_texts(config):

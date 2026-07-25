@@ -20,6 +20,7 @@ import numpy
 
 from .config import load_config, to_dict
 from .model import GPT, build_config
+from .tokenizer import fingerprint as tokenizer_fingerprint
 from .utils import (
     ensure_directory, get_local_rank, get_logger, get_world_size,
     is_distributed, is_main_process, normalize_state_dict, set_seed,
@@ -72,11 +73,23 @@ def run(config, packed_directory=None, checkpoint_root=None):
     device_type = 'cuda' if device.startswith('cuda') else 'cpu'
     pretrain_config = config.pretrain
 
-    if packed_directory is None:
+    base_pipeline = packed_directory is None
+    if base_pipeline:
         packed_directory = config.data_dir / 'packed'
     meta = json.loads((packed_directory / 'meta.json').read_text())
     vocabulary_size = meta['vocabulary_size']
     dtype = meta['dtype']
+    expected_fingerprint = meta.get('tokenizer_fingerprint')
+    if (base_pipeline and expected_fingerprint
+            and config.tokenizer_path.exists()):
+        current_fingerprint = tokenizer_fingerprint(config.tokenizer_path)
+        if current_fingerprint != expected_fingerprint:
+            raise SystemExit(
+                'packed data in %s was built with tokenizer %s but %s has '
+                'fingerprint %s; rerun the data stage before pretraining'
+                % (packed_directory, expected_fingerprint,
+                   config.tokenizer_path, current_fingerprint)
+            )
 
     gpt_config = build_config(config.model, vocabulary_size)
     model = GPT(gpt_config).to(device)
@@ -140,6 +153,16 @@ def run(config, packed_directory=None, checkpoint_root=None):
     last_checkpoint = checkpoint_directory / 'ckpt_last.pt'
     if last_checkpoint.exists():
         saved = torch.load(last_checkpoint, map_location=device)
+        if (expected_fingerprint
+                and saved.get('tokenizer_fingerprint') != expected_fingerprint):
+            raise SystemExit(
+                'cannot resume: %s was trained with a different tokenizer '
+                'than the packed data (checkpoint fingerprint %s, data '
+                'fingerprint %s); delete the stale checkpoints under %s to '
+                'pretrain from scratch'
+                % (last_checkpoint, saved.get('tokenizer_fingerprint'),
+                   expected_fingerprint, checkpoint_directory)
+            )
         base_model.load_state_dict(normalize_state_dict(saved['model']))
         optimizer.load_state_dict(saved['optimizer'])
         start_step = saved['step'] + 1
@@ -172,6 +195,7 @@ def run(config, packed_directory=None, checkpoint_root=None):
             'best_validation': best_validation,
             'model_config': to_dict(config.model),
             'vocabulary_size': vocabulary_size,
+            'tokenizer_fingerprint': expected_fingerprint,
         }
         torch.save(payload, checkpoint_directory / ('%s.pt' % tag))
 

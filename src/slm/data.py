@@ -15,7 +15,7 @@ import json
 import numpy
 
 from .config import load_config
-from .tokenizer import SyntheticTokenizer
+from .tokenizer import SyntheticTokenizer, fingerprint as tokenizer_fingerprint
 from .utils import ensure_directory, get_logger
 
 logger = get_logger('data')
@@ -157,6 +157,7 @@ def prepare_pretrain(config):
     total = train_tokens + validation_tokens
     meta = {
         'vocabulary_size': tokenizer.vocabulary_size,
+        'tokenizer_fingerprint': tokenizer_fingerprint(config.tokenizer_path),
         'dtype': numpy.dtype(dtype).name,
         'train_tokens': train_tokens,
         'validation_tokens': validation_tokens,

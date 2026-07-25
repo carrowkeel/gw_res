@@ -22,6 +22,8 @@ import numpy
 from .config import load_config, to_dict
 from .model import GPT, build_config
 from .tokenizer import SyntheticTokenizer
+from .sftstage import verify_checkpoint_tokenizer
+from .tokenizer import fingerprint as tokenizer_fingerprint
 from .utils import ensure_directory, get_logger, normalize_state_dict, set_seed
 
 logger = get_logger('finetune')
@@ -34,6 +36,7 @@ def _load_pretrained(config, device):
     if not checkpoint_path.exists():
         checkpoint_path = config.pretrain_dir / 'ckpt_last.pt'
     saved = torch.load(checkpoint_path, map_location=device)
+    verify_checkpoint_tokenizer(saved, checkpoint_path, config.tokenizer_path)
     gpt_config = build_config(config.model, saved['vocabulary_size'])
     model = GPT(gpt_config).to(device)
     model.load_state_dict(normalize_state_dict(saved['model']))
@@ -57,6 +60,9 @@ def _save(model, config, gpt_config, step, checkpoint_directory, name,
             'best_validation': best_validation,
             'model_config': to_dict(config.model),
             'vocabulary_size': gpt_config.vocabulary_size,
+            'tokenizer_fingerprint': tokenizer_fingerprint(
+                config.tokenizer_path
+            ),
         },
         checkpoint_directory / name,
     )
