@@ -63,10 +63,16 @@ model's improvement on each capability is tracked on its own:
   questions, which the base model has no concept of (it continues dialogue
   as chitchat). Data: dialogues in the stage-1 name-and-colon turn format
   whose last turn answers a direct question from the conversation; loss on
-  the answer turn only; stage-1 replay against forgetting. A programmatic
-  groundedness filter rejects generated answers that fabricate particulars
-  (any number absent from the dialogue, low content overlap), because the
-  target skill is retrieval from context, not plausible invention.
+  the answer turn only; stage-1 replay against forgetting. Generation is
+  split into two requests — one writes a light, cooperative conversation
+  rich in concrete particulars, the next extracts a question and answer
+  about it, and the program attaches them as turns by distinct speakers —
+  because asking for dialogue plus embedded question-answer structure in
+  one request had a low satisfaction rate and left quality to a hard
+  filter (weak instruction, hard filter is wasteful). Filtering is a
+  narrow safety net, not the quality mechanism: format parse, ASCII, and
+  numbers-grounded (every numeric token in the answer must appear in the
+  dialogue — the one fabrication class that is objectively detectable).
   Implemented in commsft.py as the commsft stage.
 - **Arithmetic SFT** teaches basic arithmetic (integer addition,
   subtraction, comparison in the sim's numeric range), same dialogue

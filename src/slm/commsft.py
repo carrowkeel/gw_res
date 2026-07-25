@@ -50,48 +50,22 @@ def _numeric(token):
         or token in NUMBER_WORDS
 
 
-def grounded(record, minimum_overlap):
-    """Reject answers that introduce content absent from the dialogue.
+RECIPE = 2
 
-    The generator, asked to answer from the conversation, still fabricates
-    plausible particulars (a novel place name, a date like April 18th) in
-    a substantial share of dialogues, and training on those teaches
-    invention instead of retrieval. Fabrication is objectively detectable:
-    every numeric token in the answer (anything containing a digit, or a
-    number word) must appear in the dialogue, and the answer's content
-    words must mostly come from it.
+
+def numbers_grounded(record):
+    """Every numeric token in the answer must appear in the dialogue.
+
+    The one fabrication class worth hard-filtering: an invented number,
+    date, or count (anything containing a digit, or a number word) is
+    objectively wrong and objectively detectable. Everything softer is the
+    generation's job, not the filter's.
     """
     prompt_tokens = set(sfteval.normalize_tokens(record['prompt']))
-    content = [
-        token for token in sfteval.normalize_tokens(record['response'])
-        if len(token) > 3 or _numeric(token)
-    ]
-    if not content:
-        return False
-    for token in content:
+    for token in sfteval.normalize_tokens(record['response']):
         if _numeric(token) and token not in prompt_tokens:
             return False
-    matched = sum(token in prompt_tokens for token in content)
-    return matched / len(content) >= minimum_overlap
-
-
-def copies_earlier_turn(record):
-    """True when the answer is a verbatim copy of a whole earlier turn.
-
-    An answer that repeats an entire prior turn is maximally grounded and
-    usually wrong: it is the generator dodging the question with a line
-    that was already said, the degenerate case the overlap measure alone
-    rewards.
-    """
-    response_normalized = ' '.join(
-        sfteval.normalize_tokens(record['response'])
-    )
-    for line in record['prompt'].split('\n')[:-1]:
-        _, _, turn_text = line.partition(':')
-        if turn_text.strip() and ' '.join(
-                sfteval.normalize_tokens(turn_text)) == response_normalized:
-            return True
-    return False
+    return True
 
 
 def acceptable_text(text):
@@ -104,12 +78,38 @@ def acceptable_text(text):
     return text.translate(_UNICODE_PUNCTUATION).isascii()
 
 
-def usable(record, minimum_overlap):
+def usable(record):
     return (
         acceptable_text(record['prompt'] + record['response'])
-        and grounded(record, minimum_overlap)
-        and not copies_earlier_turn(record)
+        and numbers_grounded(record)
     )
+
+
+def assemble_record(turns, question, answer, random_generator):
+    """Attach an extracted question and answer to a conversation as turns.
+
+    The question becomes a turn by one participant and the answer cue goes
+    to a different participant, so the record keeps the exact training
+    format under program control instead of parsing it out of generation.
+    """
+    speakers = []
+    for speaker, _ in turns:
+        if speaker not in speakers:
+            speakers.append(speaker)
+    if len(speakers) < 2:
+        return None
+    question_speaker = random_generator.choice(speakers)
+    answer_speaker = random_generator.choice(
+        [speaker for speaker in speakers if speaker != question_speaker]
+    )
+    lines = ['%s: %s' % (speaker, text) for speaker, text in turns]
+    lines.append('%s: %s' % (question_speaker, question))
+    return {
+        'prompt': '\n'.join(lines) + '\n%s:' % answer_speaker,
+        'response': answer,
+        'question': question,
+        'recipe': RECIPE,
+    }
 
 
 def _records_path(config):
@@ -138,8 +138,14 @@ def _scan_records(path):
 def generate_dialogues(config):
     """Generate question-answering dialogues up to the configured count.
 
-    Resumable: counts the records already written and generates only the
-    shortfall, deduplicating against them. Returns the record list.
+    Two requests per dialogue: one writes a light, cooperative
+    conversation with no embedded demands, the next extracts a question
+    and answer about it, and the program attaches them as turns. Splitting
+    the requests keeps each task easy for the generator, so the yield is
+    high and filtering stays a narrow safety net (format, ASCII, numbers
+    grounded) rather than the quality mechanism. Resumable: records
+    already written under the current recipe are counted and only the
+    shortfall is generated; records from older recipes are dropped.
     """
     commsft_config = config.commsft
     generate_config = config.generate
@@ -149,12 +155,12 @@ def generate_dialogues(config):
     scanned = len(records)
     records = [
         record for record in records
-        if usable(record, commsft_config.minimum_grounding)
+        if record.get('recipe') == RECIPE and usable(record)
     ]
     if scanned > len(records):
         logger.info(
-            'dropped %d unusable dialogues of %d on disk; topping up',
-            scanned - len(records), scanned,
+            'dropped %d records of older recipes or failing the filter '
+            '(%d on disk); topping up', scanned - len(records), scanned,
         )
     if len(records) >= target:
         logger.info('dialogue pool already complete (%d)', len(records))
@@ -165,33 +171,61 @@ def generate_dialogues(config):
     engine, sampling = _load_engine(
         generate_config.default_model, generate_config
     )
+    from vllm import SamplingParams
+
+    qa_sampling = SamplingParams(
+        temperature=0.3, top_p=0.9, max_tokens=120,
+    )
     system_prompt = prompts.build_system_prompt()
-    example_turns = prompts.qa_dialogue_example_turns()
     kept = len(records)
     attempts = 0
-    maximum_attempts = (target - kept) * 8 + generate_config.batch_size
+    maximum_attempts = (target - kept) * 4 + generate_config.batch_size
+    minimum_conversation_turns = max(2, commsft_config.minimum_turns - 2)
     with open(output_path, 'a') as handle:
         while kept < target and attempts < maximum_attempts:
             size = min(generate_config.batch_size, (target - kept) * 2 + 1)
-            user_prompts = [
-                prompts.build_qa_dialogue_prompt(random_generator)
+            conversation_prompts = [
+                prompts.build_conversation_prompt(random_generator)
                 for _ in range(size)
             ]
-            texts = _chat(
-                engine, sampling, system_prompt, user_prompts, example_turns
+            conversations = _chat(
+                engine, sampling, system_prompt, conversation_prompts
             )
             attempts += size
-            for text in texts:
-                if kept >= target:
-                    break
-                record = prompts.parse_qa_dialogue(
-                    text, commsft_config.minimum_turns
-                )
-                if record is None:
+            candidates = []
+            for text in conversations:
+                turns = prompts.parse_turns(text)
+                if turns is None or len(turns) < minimum_conversation_turns:
+                    continue
+                if not acceptable_text(text):
+                    continue
+                if len({speaker for speaker, _ in turns}) < 2:
                     continue
                 if generate_config.apply_filter and not filters.passes(text):
                     continue
-                if not usable(record, commsft_config.minimum_grounding):
+                candidates.append(turns)
+            if not candidates:
+                logger.info('dialogues: kept %d / %d', kept, target)
+                continue
+            qa_prompts = [
+                prompts.build_qa_extraction_prompt(
+                    '\n'.join('%s: %s' % turn for turn in turns)
+                )
+                for turns in candidates
+            ]
+            qa_texts = _chat(
+                engine, qa_sampling, system_prompt, qa_prompts
+            )
+            for turns, qa_text in zip(candidates, qa_texts):
+                if kept >= target:
+                    break
+                pair = prompts.split_question_answer(qa_text)
+                if pair is None:
+                    continue
+                record = assemble_record(
+                    turns, pair[0], pair[1], random_generator
+                )
+                if record is None or not usable(record):
                     continue
                 fingerprint = _normalized_hash(
                     record['prompt'] + record['response']
