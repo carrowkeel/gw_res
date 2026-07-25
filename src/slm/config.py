@@ -136,7 +136,6 @@ class CommSftConfig:
     number_of_dialogues: int = 20000
     holdout_fraction: float = 0.02
     minimum_turns: int = 5
-    minimum_grounding: float = 0.6
     batch_size: int = 16
     gradient_accumulation_steps: int = 2
     epochs: int = 2
