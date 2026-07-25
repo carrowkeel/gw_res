@@ -37,6 +37,7 @@ model:
 
 pretrain:
   batch_size: 24
+  effective_batch_size: 192
   gradient_accumulation_steps: 2
   maximum_steps: 7000
   learning_rate: 0.0004

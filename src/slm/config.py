@@ -87,6 +87,7 @@ class ModelConfig:
 class PretrainConfig:
     batch_size: int = 32
     gradient_accumulation_steps: int = 8
+    effective_batch_size: int = None
     maximum_steps: int = 50000
     learning_rate: float = 6e-4
     minimum_learning_rate: float = 6e-5
