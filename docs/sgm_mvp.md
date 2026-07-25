@@ -102,9 +102,15 @@ carry repetition warning metrics (distinct-prediction rate, repeated-bigram
 rate) so the loop signature that collapsed the sim pilots is visible here
 too. For numeric answers, similarity scoring rewards the answer template
 even when the number is wrong (the first mathsft run scored 1.0 answered
-with mostly wrong numbers), so the eval also reports numbers_correct_rate
-— exact numeric match — overall and per kind; that is the real measure of
-arithmetic.
+with mostly wrong numbers), so the eval also reports numbers_correct_rate,
+exact numeric match, overall and per kind; that is the real measure of
+arithmetic. The training loss is coupled to the same accuracy: mean
+cross-entropy over the answer is dominated by template tokens (the first
+run reached 0.396 validation loss with wrong numbers), so digit-bearing
+answer tokens are upweighted (numeric_token_weight), validation uses the
+same weighted objective for best-checkpoint selection, and a numeric-only
+validation loss is logged so the accuracy signal is visible during
+training, not only at eval.
 
 ### Stage 2 — simulation training (the main effort)
 

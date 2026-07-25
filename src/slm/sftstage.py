@@ -68,11 +68,29 @@ class PlainPairDataset:
     is already complete text (a dialogue ending at the answering speaker's
     cue), so the example is bos + prompt tokens + response tokens + eos,
     with every position that predicts a prompt token masked out.
+
+    numeric_token_weight above one upweights the answer tokens that carry
+    digits in the loss. Mean cross-entropy over the whole answer is
+    dominated by the template tokens, so a model can reach low loss with
+    perfect form and wrong numbers; weighting the digit tokens makes low
+    loss unreachable without correct numbers, coupling the training loss
+    to actual accuracy rather than leaving accuracy to the eval.
     """
 
-    def __init__(self, records, tokenizer, maximum_length):
+    def __init__(self, records, tokenizer, maximum_length,
+                 numeric_token_weight=1.0):
         self.examples = []
         self.pad_id = tokenizer.pad_id
+        digitful = {}
+
+        def has_digit(token_id):
+            if token_id not in digitful:
+                digitful[token_id] = any(
+                    character.isdigit()
+                    for character in tokenizer.decode([token_id])
+                )
+            return digitful[token_id]
+
         for record in records:
             prefix_ids = (
                 [tokenizer.bos_id] + tokenizer.encode(record['prompt'])
@@ -84,9 +102,16 @@ class PlainPairDataset:
             tokens = prefix_ids + answer_ids
             input_ids = tokens[:-1]
             labels = [-100] * (len(prefix_ids) - 1) + answer_ids
-            self.examples.append(
-                (input_ids[:maximum_length], labels[:maximum_length])
-            )
+            weights = [0.0] * (len(prefix_ids) - 1) + [
+                numeric_token_weight
+                if numeric_token_weight != 1.0 and has_digit(token_id)
+                else 1.0
+                for token_id in answer_ids
+            ]
+            self.examples.append((
+                input_ids[:maximum_length], labels[:maximum_length],
+                weights[:maximum_length],
+            ))
 
     def length(self):
         return len(self.examples)
@@ -95,17 +120,22 @@ class PlainPairDataset:
         import torch
 
         items = [self.examples[index] for index in indices]
-        longest = max(len(input_ids) for input_ids, _ in items)
+        longest = max(len(input_ids) for input_ids, _, _ in items)
         input_batch = []
         label_batch = []
-        for input_ids, labels in items:
+        weight_batch = []
+        for input_ids, labels, weights in items:
             padding = longest - len(input_ids)
             input_batch.append(input_ids + [self.pad_id] * padding)
             label_batch.append(labels + [-100] * padding)
+            weight_batch.append(weights + [0.0] * padding)
         as_tensor = lambda rows: torch.tensor(
             rows, dtype=torch.long, device=device
         )
-        return as_tensor(input_batch), as_tensor(label_batch)
+        return (
+            as_tensor(input_batch), as_tensor(label_batch),
+            torch.tensor(weight_batch, device=device),
+        )
 
 
 def _load_replay(config, block_size):
@@ -159,22 +189,53 @@ def replay_validation_loss(model, dataset, batch_size, device, autocast,
     return sum(losses) / len(losses) if losses else float('inf')
 
 
-def _mean_loss(model, dataset, indices, batch_size, device, autocast):
+def _per_token_loss(model, inputs, labels, autocast):
+    from torch.nn import functional
+
+    with autocast:
+        logits, _ = model(inputs, labels)
+    return functional.cross_entropy(
+        logits.view(-1, logits.size(-1)), labels.view(-1),
+        reduction='none', ignore_index=-100,
+    ).view(labels.shape)
+
+
+def _validation_losses(model, dataset, indices, batch_size, device,
+                       autocast):
+    """Weighted validation loss plus the loss on numeric tokens alone.
+
+    The weighted loss selects the best checkpoint under the same objective
+    training uses; the numeric-only loss makes the accuracy signal visible
+    on its own, undiluted by the template tokens.
+    """
     import torch
 
     model.eval()
     losses = []
+    numeric_losses = []
     with torch.no_grad():
         for start in range(0, len(indices), batch_size):
             batch_indices = indices[start:start + batch_size]
             if not batch_indices:
                 continue
-            inputs, labels = dataset.collate(batch_indices, device)
-            with autocast:
-                _, loss = model(inputs, labels)
-            losses.append(loss.item())
+            inputs, labels, weights = dataset.collate(batch_indices, device)
+            per_token = _per_token_loss(model, inputs, labels, autocast)
+            losses.append((
+                (per_token * weights).sum()
+                / weights.sum().clamp(min=1.0)
+            ).item())
+            numeric_mask = (weights > 1.0).float()
+            if numeric_mask.sum() > 0:
+                numeric_losses.append((
+                    (per_token * numeric_mask).sum() / numeric_mask.sum()
+                ).item())
     model.train()
-    return sum(losses) / len(losses) if losses else float('inf')
+    mean = sum(losses) / len(losses) if losses else float('inf')
+    numeric = (
+        sum(numeric_losses) / len(numeric_losses)
+        if numeric_losses else None
+    )
+    return mean, numeric
 
 
 def train_stage(config, stage_config, tokenizer, train_records,
@@ -200,20 +261,22 @@ def train_stage(config, stage_config, tokenizer, train_records,
     )
     logger.info('%s: starting from %s', name, source_checkpoint)
 
+    numeric_token_weight = stage_config.numeric_token_weight
     dataset = PlainPairDataset(
-        train_records, tokenizer, stage_config.maximum_sequence_length
+        train_records, tokenizer, stage_config.maximum_sequence_length,
+        numeric_token_weight,
     )
     validation = None
     if validation_records:
         validation = PlainPairDataset(
             validation_records, tokenizer,
-            stage_config.maximum_sequence_length,
+            stage_config.maximum_sequence_length, numeric_token_weight,
         )
     rehearsal = None
     if rehearsal_records and rehearsal_fraction > 0.0:
         rehearsal = PlainPairDataset(
             rehearsal_records, tokenizer,
-            stage_config.maximum_sequence_length,
+            stage_config.maximum_sequence_length, numeric_token_weight,
         )
 
     precision = {
@@ -332,6 +395,7 @@ def train_stage(config, stage_config, tokenizer, train_records,
         for _ in range(stage_config.gradient_accumulation_steps):
             draw = replay_generator.random()
             source = 'stage'
+            weights = None
             if replay is not None and draw < stage_config.replay_fraction:
                 inputs, labels = replay.get_batch(
                     stage_config.batch_size, device, replay_generator
@@ -342,15 +406,24 @@ def train_stage(config, stage_config, tokenizer, train_records,
                 chosen = replay_generator.integers(
                     0, rehearsal.length(), size=stage_config.batch_size
                 ).tolist()
-                inputs, labels = rehearsal.collate(chosen, device)
+                inputs, labels, weights = rehearsal.collate(chosen, device)
                 source = 'rehearsal'
             else:
-                inputs, labels = dataset.collate(
+                inputs, labels, weights = dataset.collate(
                     next_indices(stage_config.batch_size), device
                 )
-            with autocast:
-                _, loss = model(inputs, labels)
-                loss = loss / stage_config.gradient_accumulation_steps
+            if weights is None:
+                with autocast:
+                    _, loss = model(inputs, labels)
+            else:
+                per_token = _per_token_loss(
+                    model, inputs, labels, autocast
+                )
+                loss = (
+                    (per_token * weights).sum()
+                    / weights.sum().clamp(min=1.0)
+                )
+            loss = loss / stage_config.gradient_accumulation_steps
             loss.backward()
             step_loss += loss.item()
             if source == 'replay':
@@ -380,7 +453,7 @@ def train_stage(config, stage_config, tokenizer, train_records,
         if (validation is not None and stage_config.evaluation_interval > 0
                 and step > 0
                 and step % stage_config.evaluation_interval == 0):
-            validation_loss = _mean_loss(
+            validation_loss, numeric_validation = _validation_losses(
                 model, validation, list(range(validation.length())),
                 stage_config.batch_size, device, autocast,
             )
@@ -395,6 +468,10 @@ def train_stage(config, stage_config, tokenizer, train_records,
                     'step': step,
                     'train_loss': round(step_loss, 4),
                     'validation_loss': round(validation_loss, 4),
+                    'numeric_validation_loss': (
+                        round(numeric_validation, 4)
+                        if numeric_validation is not None else None
+                    ),
                     'replay_loss': (
                         round(replay_loss_value, 4)
                         if replay_loss_value is not None else None
@@ -409,8 +486,11 @@ def train_stage(config, stage_config, tokenizer, train_records,
                     ),
                 }) + '\n')
             logger.info(
-                '%s step %d  val loss %.4f (best %.4f)  replay val %s%s',
+                '%s step %d  val loss %.4f (best %.4f)  numeric val %s  '
+                'replay val %s%s',
                 name, step, validation_loss, best_validation,
+                '%.4f' % numeric_validation
+                if numeric_validation is not None else '-',
                 '%.4f' % replay_validation_value
                 if replay_validation_value is not None else '-',
                 ' (started %.4f)' % initial_replay_loss
@@ -421,8 +501,9 @@ def train_stage(config, stage_config, tokenizer, train_records,
                 save(step, 'ckpt_best.pt', step_loss, validation_loss)
 
     final_validation = None
+    final_numeric = None
     if validation is not None:
-        final_validation = _mean_loss(
+        final_validation, final_numeric = _validation_losses(
             model, validation, list(range(validation.length())),
             stage_config.batch_size, device, autocast,
         )
@@ -444,6 +525,10 @@ def train_stage(config, stage_config, tokenizer, train_records,
                 'step': step,
                 'train_loss': round(step_loss, 4),
                 'validation_loss': round(final_validation, 4),
+                'numeric_validation_loss': (
+                    round(final_numeric, 4)
+                    if final_numeric is not None else None
+                ),
                 'replay_validation_loss': (
                     round(final_replay, 4)
                     if final_replay is not None else None

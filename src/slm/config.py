@@ -138,6 +138,7 @@ class CommSftConfig:
     minimum_turns: int = 5
     maximum_turns: int = 8
     conversation_max_tokens: int = 360
+    numeric_token_weight: float = 1.0
     batch_size: int = 16
     gradient_accumulation_steps: int = 2
     epochs: int = 2
@@ -161,6 +162,7 @@ class MathSftConfig:
     holdout_fraction: float = 0.02
     maximum_value: int = 1000
     communication_fraction: float = 0.3
+    numeric_token_weight: float = 5.0
     batch_size: int = 16
     gradient_accumulation_steps: int = 2
     epochs: int = 1
