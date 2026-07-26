@@ -184,6 +184,7 @@ class MathSftConfig:
 @dataclass
 class BridgeSftConfig:
     number_of_dialogues: int = 200000
+    workers: int = 1
     qa_fraction: float = 0.35
     decision_fraction: float = 0.2
     probe_records: int = 600

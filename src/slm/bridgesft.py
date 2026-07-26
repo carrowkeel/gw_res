@@ -328,12 +328,37 @@ def _generate_pool(config, engine, conversation_sampling, followup_sampling,
     return records
 
 
-def generate_records(config):
-    """Generate the training pool and the held-out-axes probe pool."""
+def _shard_target(total, worker_count, worker_index):
+    """Return this worker's share of a pool, distributing the remainder."""
+    base = total // worker_count
+    return base + (1 if worker_index < total % worker_count else 0)
+
+
+def _pool_path(config, worker_index):
+    if worker_index is None:
+        return config.bridgesft_data_dir / 'bridgesft.jsonl'
+    return config.bridgesft_data_dir / (
+        'bridgesft_worker_%03d.jsonl' % worker_index
+    )
+
+
+def generate_records(config, worker_count=1, worker_index=None):
+    """Generate record pools; shardable across independent workers.
+
+    With worker_index set, this process generates only its share of the
+    main pool (worker zero also owns the probe pool) into its own file and
+    returns None; the dedicated training job merges the shards afterward.
+    Each worker draws from its own seed stream, and the merge deduplicates
+    across shards, so workers never coordinate and any of them can be
+    requeued or rerun independently.
+    """
     bridgesft_config = config.bridgesft
     generate_config = config.generate
     data_directory = ensure_directory(config.bridgesft_data_dir)
-    random_generator = random.Random(config.project.seed + 41)
+    stream_index = worker_index or 0
+    random_generator = random.Random(
+        config.project.seed + 41 + stream_index * 999983
+    )
     engine, _ = _load_engine(generate_config.default_model, generate_config)
     from vllm import SamplingParams
 
@@ -347,16 +372,22 @@ def generate_records(config):
     followup_sampling = SamplingParams(
         temperature=0.3, top_p=0.9, max_tokens=120,
     )
+    main_target = _shard_target(
+        bridgesft_config.number_of_dialogues,
+        max(1, worker_count), stream_index,
+    ) if worker_index is not None else bridgesft_config.number_of_dialogues
     records = _generate_pool(
         config, engine, conversation_sampling, followup_sampling,
-        random_generator, bridgesft_config.number_of_dialogues,
-        data_directory / 'bridgesft.jsonl', heldout=False,
+        random_generator, main_target,
+        _pool_path(config, worker_index), heldout=False,
     )
-    probe = _generate_pool(
-        config, engine, conversation_sampling, followup_sampling,
-        random_generator, bridgesft_config.probe_records,
-        data_directory / 'probe.jsonl', heldout=True,
-    )
+    probe = None
+    if worker_index is None or worker_index == 0:
+        probe = _generate_pool(
+            config, engine, conversation_sampling, followup_sampling,
+            random_generator, bridgesft_config.probe_records,
+            data_directory / 'probe.jsonl', heldout=True,
+        )
     del engine
     gc.collect()
     try:
@@ -365,7 +396,46 @@ def generate_records(config):
         torch.cuda.empty_cache()
     except Exception:
         pass
+    if worker_index is not None:
+        return None
     return records, probe
+
+
+def merge_pools(config):
+    """Merge worker shards (and any single-job pool) into one record list.
+
+    Deduplicates across shards by normalized content hash and refuses to
+    proceed below the configured target, naming the shortfall so the
+    worker array can be rerun to top up.
+    """
+    records = []
+    seen = set()
+    for path in sorted(config.bridgesft_data_dir.glob('bridgesft*.jsonl')):
+        shard, _ = _scan_records(path)
+        added = 0
+        for record in shard:
+            fingerprint = _normalized_hash(
+                record['prompt'] + record['response']
+            )
+            if fingerprint in seen:
+                continue
+            seen.add(fingerprint)
+            records.append(record)
+            added += 1
+        logger.info('merge: %s contributed %d records', path.name, added)
+    target = config.bridgesft.number_of_dialogues
+    if len(records) < target:
+        raise SystemExit(
+            'merged pools hold %d of %d records; rerun the bridgesft '
+            'worker array to top up' % (len(records), target)
+        )
+    probe, _ = _scan_records(config.bridgesft_data_dir / 'probe.jsonl')
+    if len(probe) < config.bridgesft.probe_records:
+        raise SystemExit(
+            'probe pool holds %d of %d records; rerun worker zero to top '
+            'up' % (len(probe), config.bridgesft.probe_records)
+        )
+    return records[:target], probe
 
 
 def split_records(config, records):
@@ -386,9 +456,15 @@ def split_records(config, records):
     return train, holdout
 
 
-def run(config):
+def run(config, worker_count=1, worker_index=None):
     set_seed(config.project.seed)
-    records, probe = generate_records(config)
+    if worker_index is not None:
+        generate_records(config, worker_count, worker_index)
+        return None
+    if worker_count > 1:
+        records, probe = merge_pools(config)
+    else:
+        records, probe = generate_records(config)
     train, holdout = split_records(config, records)
 
     source_checkpoint = sftstage.resolve_checkpoint(config.pretrain_dir)
@@ -434,8 +510,21 @@ def main():
     )
     parser.add_argument('--config', required=True)
     parser.add_argument('--run-id', default=None)
+    parser.add_argument(
+        '--worker-count', type=int, default=1,
+        help='number of generation workers sharding the pools',
+    )
+    parser.add_argument(
+        '--worker-index', type=int, default=None,
+        help='generate only this worker\'s shard and exit; omit to train '
+             '(merging shards when --worker-count is above one)',
+    )
     arguments = parser.parse_args()
-    run(load_config(arguments.config, run_id=arguments.run_id))
+    run(
+        load_config(arguments.config, run_id=arguments.run_id),
+        worker_count=arguments.worker_count,
+        worker_index=arguments.worker_index,
+    )
 
 
 if __name__ == '__main__':

@@ -89,6 +89,7 @@ mathsft:
 
 bridgesft:
   number_of_dialogues: 200000
+  workers: 4
   qa_fraction: 0.35
   decision_fraction: 0.2
   probe_records: 600

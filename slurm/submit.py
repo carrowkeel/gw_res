@@ -280,6 +280,32 @@ def submit(config_path, stages, dry_run):
                 dependency_type='afterany',
             )
             continue
+        if stage == 'bridgesft' and config.bridgesft.workers > 1:
+            workers = config.bridgesft.workers
+            base_command = _stage_command('bridgesft', config, config_path)
+            sbatch = _sbatch_arguments(
+                config, 'slm-bridgesft-gen', _stage_gres('bridgesft', config)
+            )
+            sbatch += ['--array', '0-%d' % (workers - 1), '--requeue']
+            command = _requeue_on_failure(
+                '%s --worker-count %d --worker-index $SLURM_ARRAY_TASK_ID'
+                % (base_command, workers)
+            )
+            array_job = _submit_job(
+                'bridgesft-gen', sbatch, command, previous_job, dry_run
+            )
+            train_sbatch = _sbatch_arguments(
+                config, 'slm-bridgesft', _stage_gres('bridgesft', config)
+            )
+            # afterany, not afterok: the merge's completeness check is the
+            # real gate and reports any shortfall loudly, rather than the
+            # train job being silently dropped on one failed worker task.
+            previous_job = _submit_job(
+                'bridgesft', train_sbatch,
+                '%s --worker-count %d' % (base_command, workers),
+                array_job, dry_run, dependency_type='afterany',
+            )
+            continue
         if stage == 'finetune':
             previous_job = _submit_finetune(
                 config, config_path, previous_job, dry_run
