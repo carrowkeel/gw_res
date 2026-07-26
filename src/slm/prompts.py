@@ -586,3 +586,121 @@ def split_pair(text):
     if not instruction or not response:
         return None
     return instruction, response
+
+
+def _speaker_clause(names):
+    if len(names) == 2:
+        listed = '%s and %s' % tuple(names)
+    else:
+        listed = '%s, and %s' % (', '.join(names[:-1]), names[-1])
+    return (
+        'The speakers are labeled exactly %s; begin every turn with the '
+        'label and a colon and use no other labels.' % listed
+    )
+
+
+def build_seeded_conversation_prompt(axes, names, topic, turn_range,
+                                     random_generator):
+    """Return a conversation request whose diversity is dictated by seeds.
+
+    The program samples the register, tone, speaker labels, topic, and
+    length; the request asks only for language. Asking the generator to be
+    varied does not work (a sampled LLM collapses to its comfortable
+    registers), so every axis of variation is program-supplied data.
+    """
+    lower_turns, upper_turns = turn_range
+    return (
+        'Write %s: a %s conversation of %d to %d turns, no more, about %s. '
+        'Everyone takes part and they get along. Keep each turn to one or '
+        'two short sentences. The speakers share concrete particulars as '
+        'they talk: names, numbers, places, times, plans, or decisions, '
+        'and they stay consistent with one another. %s' % (
+            axes['register'], axes['tone'], lower_turns, upper_turns,
+            topic, _speaker_clause(names),
+        )
+    ) + _BEGIN_DIRECTLY
+
+
+def build_arithmetic_conversation_prompt(axes, names, facts, question,
+                                         question_speaker):
+    """Return a conversation request that weaves in program-owned numbers.
+
+    The facts and the closing question are program text with exact values;
+    the generator re-voices them in the seeded register but may not alter
+    any number. In the merged arrangement one speaker carries both facts
+    and the question in a single turn, the shape a model trained only on
+    split turns fails to recognize.
+    """
+    if axes['arrangement'] == 'merged':
+        weaving = (
+            '%s must state all of these facts and then ask the question '
+            'within one single turn: %s Then the question, exactly this '
+            'meaning: "%s"' % (question_speaker, ' '.join(facts), question)
+        )
+    else:
+        weaving = (
+            'In the course of it these facts each come up naturally, '
+            'stated by different speakers: %s The conversation must end '
+            'with %s asking, in its own words: "%s"' % (
+                ' '.join(facts), question_speaker, question,
+            )
+        )
+    return (
+        'Write %s: a %s conversation about the matter below. Keep each '
+        'turn to one or two short sentences. Every number must be kept '
+        'exactly as given, in digits. %s %s' % (
+            axes['register'], axes['tone'], weaving, _speaker_clause(names),
+        )
+    ) + _BEGIN_DIRECTLY
+
+
+def build_answer_render_prompt(conversation_text, speaker, question, answer):
+    """Return the request rendering the exact answer in the conversation's voice."""
+    return (
+        'Here is a conversation:\n\n%s\n\n%s now answers the question "%s". '
+        'The correct answer is: %s Write only %s\'s reply, one short '
+        'sentence in the voice of the conversation, keeping every number '
+        'exactly as given, in digits. Do not begin with the speaker '
+        'label.' % (conversation_text, speaker, question, answer, speaker)
+    )
+
+
+def build_decision_interaction_prompt(axes, names, situation,
+                                      random_generator):
+    """Return a request for an interaction that demands a decision.
+
+    In the asked cue the last turn asks outright what to do; in the
+    unasked cue the last turn only states the situation's urgency, so the
+    model learns that a decision follows from the stakes, not from being
+    questioned.
+    """
+    last_speaker = names[-1]
+    if axes['cue'] == 'asked':
+        ending = (
+            'The final turn is %s asking outright what they should do '
+            'about it.' % last_speaker
+        )
+    else:
+        ending = (
+            'The final turn is %s stating how pressing the situation has '
+            'become, without asking any question.' % last_speaker
+        )
+    return (
+        'Write %s: a %s conversation of 3 to 6 turns in this situation: '
+        '%s. Keep each turn to one or two short sentences, with concrete '
+        'particulars. %s %s' % (
+            axes['register'], axes['tone'], situation, ending,
+            _speaker_clause(names),
+        )
+    ) + _BEGIN_DIRECTLY
+
+
+def build_decision_response_prompt(conversation_text, speaker):
+    """Return the request for a decisive next turn."""
+    return (
+        'Here is a conversation:\n\n%s\n\n%s now responds with a decision: '
+        'one or two short sentences committing to a specific course of '
+        'action, in the voice of the conversation. No hedging, no '
+        'questions back. Write only %s\'s reply, without the speaker '
+        'label.' % (conversation_text, speaker, speaker)
+    )

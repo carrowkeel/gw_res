@@ -182,6 +182,36 @@ class MathSftConfig:
 
 
 @dataclass
+class BridgeSftConfig:
+    number_of_dialogues: int = 200000
+    workers: int = 1
+    qa_fraction: float = 0.35
+    decision_fraction: float = 0.2
+    probe_records: int = 600
+    holdout_fraction: float = 0.005
+    maximum_value: int = 1000
+    minimum_turns: int = 3
+    maximum_turns: int = 9
+    conversation_max_tokens: int = 360
+    numeric_token_weight: float = 5.0
+    batch_size: int = 16
+    gradient_accumulation_steps: int = 2
+    epochs: int = 1
+    maximum_steps: int = None
+    learning_rate: float = 3e-5
+    minimum_learning_rate: float = 3e-6
+    warmup_ratio: float = 0.03
+    weight_decay: float = 0.0
+    gradient_clip: float = 1.0
+    dtype: str = 'bfloat16'
+    compile_model: bool = False
+    log_interval: int = 20
+    evaluation_interval: int = 200
+    maximum_sequence_length: int = 1024
+    replay_fraction: float = 0.2
+
+
+@dataclass
 class SftEvalConfig:
     max_new_tokens: int = 64
     temperature: float = 0.3
@@ -292,6 +322,7 @@ class Config:
     finetune: FinetuneConfig = field(default_factory=FinetuneConfig)
     commsft: CommSftConfig = field(default_factory=CommSftConfig)
     mathsft: MathSftConfig = field(default_factory=MathSftConfig)
+    bridgesft: BridgeSftConfig = field(default_factory=BridgeSftConfig)
     sfteval: SftEvalConfig = field(default_factory=SftEvalConfig)
     simtrain: SimTrainConfig = field(default_factory=SimTrainConfig)
     eval: EvalConfig = field(default_factory=EvalConfig)
@@ -338,6 +369,14 @@ class Config:
         return self.out_dir / 'checkpoints' / 'commsft'
 
     @property
+    def bridgesft_data_dir(self):
+        return self.data_dir / 'bridgesft'
+
+    @property
+    def bridgesft_dir(self):
+        return self.out_dir / 'checkpoints' / 'bridgesft'
+
+    @property
     def mathsft_data_dir(self):
         return self.data_dir / 'mathsft'
 
@@ -379,6 +418,7 @@ _SECTION_TYPES = {
     'finetune': FinetuneConfig,
     'commsft': CommSftConfig,
     'mathsft': MathSftConfig,
+    'bridgesft': BridgeSftConfig,
     'sfteval': SftEvalConfig,
     'simtrain': SimTrainConfig,
     'eval': EvalConfig,

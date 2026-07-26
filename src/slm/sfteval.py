@@ -8,7 +8,10 @@ the same module both tracks a stage's improvement over its source
 checkpoint and serves as the threshold instrument for entering the
 simulator. Numeric accuracy is additionally broken down per kind by the
 digit count of the largest reference number (by_result_digits), the axis
-that separates single-digit facts from carrying.
+that separates single-digit facts from carrying, and rates are stratified
+by any seed axes the records carry (by_axis: register, naming, tone,
+arrangement, cue), so a skill that only fires under one schema shows up
+as a table rather than an anecdote.
 
     python -m slm.sfteval --config <resolved.yaml> --checkpoint <ckpt.pt> \
       --records <holdout.jsonl> --output <report.json>
@@ -26,6 +29,8 @@ from .utils import get_logger
 logger = get_logger('sfteval')
 
 _WORD_PATTERN = re.compile(r'[a-z0-9]+')
+
+AXIS_FIELDS = ['register', 'naming', 'tone', 'arrangement', 'cue']
 
 
 def normalize_tokens(text):
@@ -132,6 +137,10 @@ def evaluate_model(model, tokenizer, records, sfteval_config, block_size,
         rows.append({
             'question': record.get('question'),
             'kind': record.get('kind'),
+            'axes': {
+                field: record[field] for field in AXIS_FIELDS
+                if record.get(field) is not None
+            },
             'reference': record['response'],
             'prediction': prediction,
             'f1': round(f1, 3),
@@ -206,6 +215,34 @@ def evaluate_model(model, tokenizer, records, sfteval_config, block_size,
                     for digits, bucket in sorted(entry['digits'].items())
                 }
             report['by_kind'][kind] = summary
+    axes = {}
+    for row in rows:
+        for field, value in row['axes'].items():
+            entry = axes.setdefault(field, {}).setdefault(
+                value, {'count': 0, 'answered': 0, 'numeric': 0,
+                        'correct': 0},
+            )
+            entry['count'] += 1
+            entry['answered'] += int(row['answered'])
+            if row['numbers_correct'] is not None:
+                entry['numeric'] += 1
+                entry['correct'] += int(row['numbers_correct'])
+    if axes:
+        report['by_axis'] = {}
+        for field, values in sorted(axes.items()):
+            report['by_axis'][field] = {}
+            for value, entry in sorted(values.items()):
+                summary = {
+                    'examples': entry['count'],
+                    'answered_rate': round(
+                        entry['answered'] / entry['count'], 4
+                    ),
+                }
+                if entry['numeric']:
+                    summary['numbers_correct_rate'] = round(
+                        entry['correct'] / entry['numeric'], 4
+                    )
+                report['by_axis'][field][value] = summary
     return report, rows
 
 

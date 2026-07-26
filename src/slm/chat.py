@@ -28,6 +28,7 @@ STAGE_DIRECTORIES = {
     'sft': 'sft_dir',
     'commsft': 'commsft_dir',
     'mathsft': 'mathsft_dir',
+    'bridgesft': 'bridgesft_dir',
     'simtrain': 'simtrain_dir',
 }
 
@@ -39,6 +40,8 @@ STAGE_HINTS = {
     'mathsft': 'dialogue continuation: end with a speaker cue, for example '
                '"Renn: The first cart brought 12.\\nSela: The second '
                'brought 7.\\nRenn: How many together?\\nSela:"',
+    'bridgesft': 'dialogue continuation: end with a speaker cue, any '
+                 'register (invented names, User/Agent roles, initials)',
     'simtrain': 'raw continuation of a rendered market block, ending at the '
                 'trader cue',
 }

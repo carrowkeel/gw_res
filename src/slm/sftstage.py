@@ -21,7 +21,7 @@ from .utils import get_logger, normalize_state_dict
 logger = get_logger('sftstage')
 
 
-STAGE_ORDER = ['mathsft', 'commsft', 'pretrain']
+STAGE_ORDER = ['bridgesft', 'mathsft', 'commsft', 'pretrain']
 
 
 def resolve_checkpoint(directory):
