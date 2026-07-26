@@ -70,10 +70,42 @@ checkpoints carry it in their payload, and every load or resume refuses a
 mismatch instead of silently training on a mismatched vocabulary (the
 hazard of rerunning stages into an existing run tree).
 
-### Bridging stages — communication SFT, then arithmetic SFT
+### Bridging stage — one diversified SFT (communication, arithmetic, judgment)
 
-Two SFT steps between pretraining and the simulator, kept separate so the
-model's improvement on each capability is tracked on its own:
+The two-stage path below is superseded by a single merged stage
+(bridgesft.py): the separation itself manufactured registers. Each stage's
+generator taught a narrow schema, and the model learned the trigger (cart
+dialogues, friendly chats) as faithfully as the skill: in-schema arithmetic
+reached 0.85 exact while the same questions in an unseen register failed,
+and the gate measured 0.0 actionable on the sim's format. The merged stage
+mixes three record kinds in one corpus under program-owned diversity axes,
+sampled independently per record - register (14 interaction settings),
+naming style (invented names, role nouns like User and Agent, initials),
+tone, and arrangement (facts split across turns vs stated with the
+question in a single turn). The principle, taken from stage 1 and
+previously abandoned in the SFT generators: asking the LLM to be varied
+does not work, so the program owns diversity as data and the LLM
+contributes language only. The program also owns all truth - operands,
+exact results, facts, structure - and generation verifies every number
+survived rendering.
+
+Record kinds: qa (seeded conversation, extracted question and answer);
+arithmetic (the five operation kinds, program-derived answers, LLM
+re-voicing); decision - interactions whose situation demands a decision,
+with the cue either asked (the last turn asks what to do) or unasked (the
+last turn only states the urgency), so the model learns that a decision
+follows from the stakes, not from being questioned. This replaces
+imitating the sim's protocol surface: the behavior class is taught, the
+protocol stays in-context via the exemplar turn, and no gold actions are
+ever trained.
+
+A probe pool generated only from held-out registers measures out-of-schema
+transfer, and every record carries its axis values so the eval stratifies
+accuracy by axis (by_axis): the answered-rate gap between the holdout and
+the probe, and any axis whose rate lags, is the trigger-narrowness
+measure that was previously only a REPL anecdote.
+
+The superseded two-stage path, kept for the record:
 
 - **Communication SFT** establishes coherent communication — answering
   questions, which the base model has no concept of (it continues dialogue

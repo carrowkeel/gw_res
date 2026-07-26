@@ -128,3 +128,73 @@ def sample_domains(random_generator, count):
     if count <= len(SUBJECT_DOMAINS):
         return random_generator.sample(SUBJECT_DOMAINS, count)
     return [random_generator.choice(SUBJECT_DOMAINS) for _ in range(count)]
+
+
+INTERACTION_REGISTERS = [
+    'a casual chat among friends',
+    'a workplace exchange between colleagues',
+    'a customer talking with a clerk at a counter',
+    'a support exchange between a user and an agent',
+    'an exchange of short notes between two people',
+    'a radio exchange between a field team and their base',
+    'a classroom exchange between a teacher and students',
+    'a planning meeting around a table',
+    'two neighbors talking over a fence',
+    'a market-stall exchange between a seller and buyers',
+    'a crew coordinating in the middle of a task',
+    'a family working out plans at the kitchen table',
+    'a caller asking an office for information',
+    'travellers comparing notes on the road',
+]
+
+HELDOUT_REGISTERS = [
+    'a patient describing a matter to a busy receptionist',
+    'a formal exchange during an inspection visit',
+    'two strangers thrown together by a delay, talking to pass the time',
+]
+
+SPEAKER_ROLES = [
+    'User', 'Agent', 'Customer', 'Clerk', 'Teacher', 'Student', 'Manager',
+    'Worker', 'Buyer', 'Seller', 'Captain', 'Base', 'Driver', 'Guide',
+    'Visitor', 'Caller', 'Nurse', 'Farmer', 'Cook', 'Porter',
+]
+
+NAMING_STYLES = ['invented', 'role', 'initial']
+
+DECISION_SITUATIONS = [
+    'the wind is turning against a small boat still far from shore',
+    'a delivery has not arrived and the buyer is due within the hour',
+    'rain is starting over hay that is still cut and lying in the field',
+    'a pot has boiled over and the next course is already late',
+    'the road ahead is closed and the appointment cannot be moved',
+    'a machine is running hot and the spare part is a day away',
+    'the till is short and the shop closes in ten minutes',
+    'two guests have been given the same room for tonight',
+    'the river is rising toward the footbridge before the crossing',
+    'a ladder has been left up with a storm coming in',
+    'the last bus has gone and the tickets are for the morning',
+    'an order was doubled by mistake and the extra stock is arriving',
+    'a lamp has started flickering in the middle of close work',
+    'the key to the storeroom is missing at opening time',
+    'a queue is forming faster than one counter can serve it',
+]
+
+
+def sample_speakers(style, count, random_generator):
+    """Return distinct speaker names for a naming style.
+
+    invented draws pronounceable made-up names, role draws plain role nouns
+    (User, Agent, Clerk), and initial uses single letters, so training sees
+    every convention a prompt might use to label its speakers.
+    """
+    if style == 'role':
+        return random_generator.sample(SPEAKER_ROLES, count)
+    if style == 'initial':
+        letters = [chr(ordinal) for ordinal in range(ord('A'), ord('Z') + 1)]
+        return random_generator.sample(letters, count)
+    names = []
+    while len(names) < count:
+        name = invented_name(random_generator)
+        if name not in names:
+            names.append(name)
+    return names
