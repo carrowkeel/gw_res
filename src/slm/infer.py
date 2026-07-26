@@ -6,18 +6,31 @@ chat-style response helpers used by the evaluator.
 """
 
 from .model import GPT, build_config
+from .sftstage import verify_checkpoint_tokenizer
 from .tokenizer import SyntheticTokenizer
 from .utils import normalize_state_dict
 
 
 class StudentModel:
-    def __init__(self, config, checkpoint_path, device=None):
+    """A trained checkpoint with plain continuation and instruction helpers.
+
+    tokenizer_path defaults to the config's own tokenizer; a stage whose
+    checkpoints live in a different tree from the tokenizer that built them
+    (the simulator, which trains into its own run but tokenizes with the
+    base run's artifact) passes that artifact explicitly.
+    """
+
+    def __init__(self, config, checkpoint_path, device=None,
+                 tokenizer_path=None):
         import torch
 
         self.config = config
         self.device = device or ('cuda' if torch.cuda.is_available() else 'cpu')
         saved = torch.load(checkpoint_path, map_location=self.device)
-        self.tokenizer = SyntheticTokenizer(config.tokenizer_path)
+        if tokenizer_path is None:
+            tokenizer_path = config.tokenizer_path
+        verify_checkpoint_tokenizer(saved, checkpoint_path, tokenizer_path)
+        self.tokenizer = SyntheticTokenizer(tokenizer_path)
         gpt_config = build_config(config.model, saved['vocabulary_size'])
         self.model = GPT(gpt_config).to(self.device).eval()
         self.model.load_state_dict(normalize_state_dict(saved['model']))
