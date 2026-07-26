@@ -101,7 +101,7 @@ bridgesft:
   numeric_token_weight: 5.0
   batch_size: 16
   gradient_accumulation_steps: 2
-  epochs: 1
+  epochs: 2
   learning_rate: 0.00003
   minimum_learning_rate: 0.000003
   warmup_ratio: 0.03
