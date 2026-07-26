@@ -43,9 +43,14 @@ from .utils import ensure_directory, get_logger, set_seed
 
 logger = get_logger('bridgesft')
 
-RECIPE = 1
+RECIPE = 2
 
-AXIS_FIELDS = ['register', 'naming', 'tone', 'arrangement', 'cue']
+AXIS_FIELDS = ['register', 'naming', 'tone', 'arrangement', 'cue', 'form']
+
+META_ANSWER_WORDS = {
+    'conversation', 'mentioned', 'specified', 'stated', 'dialogue',
+    'transcript', 'context',
+}
 
 
 def sample_axes(random_generator, heldout=False):
@@ -70,7 +75,14 @@ def draw_kind(random_generator, bridgesft_config):
 
 
 def build_task(random_generator, bridgesft_config, heldout=False):
-    """Sample one record's seeds and program-owned content."""
+    """Sample one record's seeds and program-owned content.
+
+    Arithmetic tasks stay short by design (a single rendered remark in the
+    merged arrangement, a 2 to 4 turn exchange in the split one): the
+    numeric relation should sit next to the question, not be buried in
+    conversation, and a small unambiguous request keeps the bulk of the
+    generation distribution valid instead of filtering toward outliers.
+    """
     kind = draw_kind(random_generator, bridgesft_config)
     axes = sample_axes(random_generator, heldout)
     participants = 2 if random_generator.random() < 0.5 else 3
@@ -79,7 +91,8 @@ def build_task(random_generator, bridgesft_config, heldout=False):
     )
     task = {'kind': kind, 'axes': axes, 'names': names}
     if kind == 'qa':
-        turn_range = random_generator.choice([(4, 6), (5, 7), (6, 8)])
+        turn_range = random_generator.choice([(3, 5), (4, 6), (5, 7)])
+        task['minimum_turns'] = 3
         task['request'] = prompts.build_seeded_conversation_prompt(
             axes, names, random_generator.choice(seeds.SUBJECT_DOMAINS),
             turn_range, random_generator,
@@ -88,13 +101,18 @@ def build_task(random_generator, bridgesft_config, heldout=False):
         axes['cue'] = (
             'asked' if random_generator.random() < 0.5 else 'unasked'
         )
+        axes['form'] = (
+            'exchange' if random_generator.random() < 0.5
+            else 'conversation'
+        )
+        task['minimum_turns'] = 2
         task['request'] = prompts.build_decision_interaction_prompt(
             axes, names, random_generator.choice(seeds.DECISION_SITUATIONS),
             random_generator,
         )
     else:
         axes['arrangement'] = (
-            'merged' if random_generator.random() < 0.35 else 'split'
+            'merged' if random_generator.random() < 0.5 else 'split'
         )
         statement_one, statement_two, question, answer = (
             mathsft._KIND_BUILDERS[kind](
@@ -108,10 +126,16 @@ def build_task(random_generator, bridgesft_config, heldout=False):
             statement_one + ' ' + statement_two
         )
         task['question_speaker'] = question_speaker
-        task['request'] = prompts.build_arithmetic_conversation_prompt(
-            axes, names, [statement_one, statement_two], question,
-            question_speaker,
-        )
+        task['minimum_turns'] = 2
+        if axes['arrangement'] == 'merged':
+            task['request'] = prompts.build_arithmetic_utterance_prompt(
+                axes, [statement_one, statement_two], question,
+            )
+        else:
+            task['request'] = prompts.build_arithmetic_exchange_prompt(
+                axes, names, [statement_one, statement_two], question,
+                question_speaker,
+            )
     return task
 
 
@@ -119,15 +143,40 @@ def _joined(turns):
     return '\n'.join('%s: %s' % turn for turn in turns)
 
 
+def _contains_operands(text, operand_values):
+    text_values = sfteval.numeric_values(text)
+    return all(value in text_values for value in operand_values)
+
+
 def parse_conversation(task, text, minimum_turns, maximum_turns):
     """Validate a first-request completion against its task; None to reject.
 
-    The turns must parse, carry at least two of the requested labels and no
-    others, and satisfy the task's structural demand: an arithmetic
-    conversation must contain every operand exactly and end with the
-    question speaker asking; a decision interaction must end with a
-    question only under the asked cue.
+    In the merged arithmetic arrangement the completion is one rendered
+    remark, not turns: the program attaches the speaker label itself, so
+    the merged shape is true by construction. Otherwise the turns must
+    parse, carry at least two of the requested labels and no others, and
+    satisfy the task's structural demand - a split arithmetic exchange
+    must contain every operand, spread beyond the question turn (all
+    operands inside the final turn is the merged shape wearing a split
+    label), and end with the question speaker asking; a decision
+    interaction must end with a question only under the asked cue.
     """
+    kind = task['kind']
+    if kind not in ('qa', 'decision') \
+            and task['axes']['arrangement'] == 'merged':
+        remark = text.strip().split('\n')[0].strip()
+        if not remark or len(remark) > 400:
+            return None
+        if not acceptable_text(remark):
+            return None
+        if '?' not in remark:
+            return None
+        if not _contains_operands(remark, task['operand_values']):
+            return None
+        if prompts.parse_turns(remark) is not None:
+            return None
+        return [(task['question_speaker'], remark)]
+    minimum_turns = task.get('minimum_turns', minimum_turns)
     turns = prompts.parse_turns(text)
     if turns is None:
         lines = text.strip().split('\n')[:-1]
@@ -142,7 +191,6 @@ def parse_conversation(task, text, minimum_turns, maximum_turns):
     joined = _joined(turns)
     if not acceptable_text(joined):
         return None
-    kind = task['kind']
     if kind == 'qa':
         return turns
     last_speaker, last_text = turns[-1]
@@ -153,14 +201,13 @@ def parse_conversation(task, text, minimum_turns, maximum_turns):
         if task['axes']['cue'] == 'unasked' and has_question:
             return None
         return turns
-    text_values = sfteval.numeric_values(joined)
-    for value in task['operand_values']:
-        if value not in text_values:
-            return None
+    if not _contains_operands(joined, task['operand_values']):
+        return None
     if '?' not in last_text:
         return None
-    if task['axes']['arrangement'] == 'split' \
-            and last_speaker != task['question_speaker']:
+    if last_speaker != task['question_speaker']:
+        return None
+    if _contains_operands(last_text, task['operand_values']):
         return None
     return turns
 
@@ -189,6 +236,15 @@ def assemble(task, turns, responder, followup_text, random_generator):
     if kind == 'qa':
         pair = prompts.split_question_answer(followup_text)
         if pair is None:
+            return None
+        answer_tokens = set(sfteval.normalize_tokens(pair[1]))
+        if answer_tokens & META_ANSWER_WORDS:
+            return None
+        question_normalized = ' '.join(sfteval.normalize_tokens(pair[0]))
+        spoken = ' '.join(
+            sfteval.normalize_tokens(_joined(turns))
+        )
+        if question_normalized and question_normalized in spoken:
             return None
         from .commsft import assemble_record
 

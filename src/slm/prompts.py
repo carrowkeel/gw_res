@@ -421,8 +421,12 @@ def build_qa_extraction_prompt(conversation_text):
         'Here is a conversation:\n\n%s\n\nWrite one direct question about '
         'a concrete particular stated in this conversation (a name, '
         'number, place, time, plan, or decision), and its short answer. '
-        'The answer must use only information stated in the conversation, '
-        'adding nothing new.%s' % (conversation_text, _QA_EXTRACTION_FORMAT)
+        'The question must be new, not a repeat of a question already '
+        'asked in the conversation, and it must have a definite answer '
+        'from what was said. The answer is spoken by one of the '
+        'participants in their own voice: plain words in the register of '
+        'the talk, never referring to the conversation itself.%s'
+        % (conversation_text, _QA_EXTRACTION_FORMAT)
     )
 
 
@@ -621,37 +625,50 @@ def build_seeded_conversation_prompt(axes, names, topic, turn_range,
     ) + _BEGIN_DIRECTLY
 
 
-def build_arithmetic_conversation_prompt(axes, names, facts, question,
-                                         question_speaker):
-    """Return a conversation request that weaves in program-owned numbers.
+def build_arithmetic_exchange_prompt(axes, names, facts, question,
+                                     question_speaker):
+    """Return a brief split-arrangement exchange around program-owned numbers.
 
-    The facts and the closing question are program text with exact values;
-    the generator re-voices them in the seeded register but may not alter
-    any number. In the merged arrangement one speaker carries both facts
-    and the question in a single turn, the shape a model trained only on
-    split turns fails to recognize.
+    A short exchange, not a conversation: two to four turns, each fact
+    voiced by a different speaker, ending with the question. Arithmetic
+    drowns in long context, so the shape stays close to the facts, and a
+    small structurally unambiguous request keeps the bulk of generations
+    valid rather than filtering toward outliers.
     """
-    if axes['arrangement'] == 'merged':
-        weaving = (
-            '%s must state all of these facts and then ask the question '
-            'within one single turn: %s Then the question, exactly this '
-            'meaning: "%s"' % (question_speaker, ' '.join(facts), question)
-        )
-    else:
-        weaving = (
-            'In the course of it these facts each come up naturally, '
-            'stated by different speakers: %s The conversation must end '
-            'with %s asking, in its own words: "%s"' % (
-                ' '.join(facts), question_speaker, question,
-            )
-        )
+    fact_speakers = (names * 2)[:len(facts)]
+    assignments = ' '.join(
+        '%s states: "%s"' % (speaker, fact)
+        for speaker, fact in zip(fact_speakers, facts)
+    )
     return (
-        'Write %s: a %s conversation about the matter below. Keep each '
-        'turn to one or two short sentences. Every number must be kept '
-        'exactly as given, in digits. %s %s' % (
-            axes['register'], axes['tone'], weaving, _speaker_clause(names),
+        'Write %s: a brief %s exchange of 2 to 4 turns, each turn one '
+        'short sentence. Each fact is voiced by its own speaker, reworded '
+        'naturally but with every number kept exactly as given, in '
+        'digits: %s The final turn is %s asking, in their own words: "%s" '
+        '%s' % (
+            axes['register'], axes['tone'], assignments, question_speaker,
+            question, _speaker_clause(names),
         )
     ) + _BEGIN_DIRECTLY
+
+
+def build_arithmetic_utterance_prompt(axes, facts, question):
+    """Return a request for one utterance carrying the facts and question.
+
+    The merged arrangement is assembled by the program from this single
+    rendered remark (speaker label and answer cue attached afterward), so
+    the merged label is true by construction: the shape a model trained
+    only on split turns fails to recognize cannot be mislabeled into the
+    data.
+    """
+    return (
+        'Reword the following as one natural remark by a single speaker, '
+        'in the voice of %s, %s in tone: they mention that %s and then '
+        'ask: "%s" One or two short sentences, every number kept exactly '
+        'as given, in digits. Write only the remark.' % (
+            axes['register'], axes['tone'], ' '.join(facts), question,
+        )
+    )
 
 
 def build_answer_render_prompt(conversation_text, speaker, question, answer):
@@ -685,11 +702,14 @@ def build_decision_interaction_prompt(axes, names, situation,
             'The final turn is %s stating how pressing the situation has '
             'become, without asking any question.' % last_speaker
         )
+    turns_clause = (
+        '2 or 3 turns' if axes.get('form') == 'exchange' else '3 to 6 turns'
+    )
     return (
-        'Write %s: a %s conversation of 3 to 6 turns in this situation: '
+        'Write %s: a %s conversation of %s in this situation: '
         '%s. Keep each turn to one or two short sentences, with concrete '
         'particulars. %s %s' % (
-            axes['register'], axes['tone'], situation, ending,
+            axes['register'], axes['tone'], turns_clause, situation, ending,
             _speaker_clause(names),
         )
     ) + _BEGIN_DIRECTLY

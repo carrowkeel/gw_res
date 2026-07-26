@@ -99,6 +99,19 @@ imitating the sim's protocol surface: the behavior class is taught, the
 protocol stays in-context via the exemplar turn, and no gold actions are
 ever trained.
 
+Records skew deliberately short, and quality is generated, not filtered
+in: arithmetic drowns in long context, so the merged arrangement is one
+LLM-rendered remark (facts plus question in a single utterance, the
+speaker label attached by the program, so the merged label is true by
+construction) and the split arrangement is a 2 to 4 turn exchange; half
+the decision interactions are brief exchanges. Each request is small and
+structurally unambiguous so the bulk of the generation distribution is
+valid - filtering hard at a low acceptance rate would select outliers of
+the generator's distribution and quietly narrow diversity, so filters
+stay outlier nets (exact numbers survived, no meta-voice answers that
+refer to the conversation as text, no question duplicating a turn,
+arrangement labels honest) while the prompts carry the quality.
+
 A probe pool generated only from held-out registers measures out-of-schema
 transfer, and every record carries its axis values so the eval stratifies
 accuracy by axis (by_axis): the answered-rate gap between the holdout and
