@@ -398,6 +398,35 @@ def _pool_path(config, worker_index):
     )
 
 
+def _release_engine(engine):
+    del engine
+    gc.collect()
+    try:
+        import torch
+
+        torch.cuda.empty_cache()
+    except Exception:
+        pass
+
+
+def _engine_and_sampling(config):
+    generate_config = config.generate
+    engine, _ = _load_engine(generate_config.default_model, generate_config)
+    from vllm import SamplingParams
+
+    conversation_sampling = SamplingParams(
+        temperature=generate_config.temperature,
+        top_p=generate_config.top_p,
+        frequency_penalty=generate_config.frequency_penalty,
+        presence_penalty=generate_config.presence_penalty,
+        max_tokens=config.bridgesft.conversation_max_tokens,
+    )
+    followup_sampling = SamplingParams(
+        temperature=0.3, top_p=0.9, max_tokens=120,
+    )
+    return engine, conversation_sampling, followup_sampling
+
+
 def generate_records(config, worker_count=1, worker_index=None):
     """Generate record pools; shardable across independent workers.
 
@@ -409,24 +438,13 @@ def generate_records(config, worker_count=1, worker_index=None):
     requeued or rerun independently.
     """
     bridgesft_config = config.bridgesft
-    generate_config = config.generate
     data_directory = ensure_directory(config.bridgesft_data_dir)
     stream_index = worker_index or 0
     random_generator = random.Random(
         config.project.seed + 41 + stream_index * 999983
     )
-    engine, _ = _load_engine(generate_config.default_model, generate_config)
-    from vllm import SamplingParams
-
-    conversation_sampling = SamplingParams(
-        temperature=generate_config.temperature,
-        top_p=generate_config.top_p,
-        frequency_penalty=generate_config.frequency_penalty,
-        presence_penalty=generate_config.presence_penalty,
-        max_tokens=bridgesft_config.conversation_max_tokens,
-    )
-    followup_sampling = SamplingParams(
-        temperature=0.3, top_p=0.9, max_tokens=120,
+    engine, conversation_sampling, followup_sampling = (
+        _engine_and_sampling(config)
     )
     main_target = _shard_target(
         bridgesft_config.number_of_dialogues,
@@ -444,25 +462,19 @@ def generate_records(config, worker_count=1, worker_index=None):
             random_generator, bridgesft_config.probe_records,
             data_directory / 'probe.jsonl', heldout=True,
         )
-    del engine
-    gc.collect()
-    try:
-        import torch
-
-        torch.cuda.empty_cache()
-    except Exception:
-        pass
+    _release_engine(engine)
     if worker_index is not None:
         return None
     return records, probe
 
 
 def merge_pools(config):
-    """Merge worker shards (and any single-job pool) into one record list.
+    """Merge worker shards and top-up files into one deduplicated list.
 
-    Deduplicates across shards by normalized content hash and refuses to
-    proceed below the configured target, naming the shortfall so the
-    worker array can be rerun to top up.
+    Returns whatever the pools hold; the caller reconciles any deficit.
+    Cross-shard duplicates are expected in small numbers (each worker
+    deduplicates only within its own shard), so a merged total slightly
+    below target is a statistical event, not a worker failure.
     """
     records = []
     seen = set()
@@ -479,17 +491,67 @@ def merge_pools(config):
             records.append(record)
             added += 1
         logger.info('merge: %s contributed %d records', path.name, added)
-    target = config.bridgesft.number_of_dialogues
-    if len(records) < target:
-        raise SystemExit(
-            'merged pools hold %d of %d records; rerun the bridgesft '
-            'worker array to top up' % (len(records), target)
-        )
     probe, _ = _scan_records(config.bridgesft_data_dir / 'probe.jsonl')
-    if len(probe) < config.bridgesft.probe_records:
+    return records, probe
+
+
+def top_up(config, missing_records, missing_probe):
+    """Generate the deficit the merged pools are short of, in this process.
+
+    The training job holds a GPU anyway, so small deficits (cross-shard
+    duplicates, a worker that died early) are healed here instead of
+    demanding a rerun of the whole worker array for a handful of records.
+    """
+    data_directory = ensure_directory(config.bridgesft_data_dir)
+    random_generator = random.Random(config.project.seed + 41 + 500009)
+    engine, conversation_sampling, followup_sampling = (
+        _engine_and_sampling(config)
+    )
+    if missing_records > 0:
+        topup_path = data_directory / 'bridgesft_topup.jsonl'
+        existing, _ = _scan_records(topup_path)
+        _generate_pool(
+            config, engine, conversation_sampling, followup_sampling,
+            random_generator, len(existing) + missing_records, topup_path,
+            heldout=False,
+        )
+    if missing_probe > 0:
+        probe_path = data_directory / 'probe.jsonl'
+        existing, _ = _scan_records(probe_path)
+        _generate_pool(
+            config, engine, conversation_sampling, followup_sampling,
+            random_generator, len(existing) + missing_probe, probe_path,
+            heldout=True,
+        )
+    _release_engine(engine)
+
+
+def reconcile_pools(config, top_up_function=top_up):
+    """Merge the pools and heal any deficit until the targets are met.
+
+    The top-up file participates in the next merge, so records it
+    contributes are deduplicated like any shard; a couple of rounds
+    always converge since collisions are rare.
+    """
+    target = config.bridgesft.number_of_dialogues
+    probe_target = config.bridgesft.probe_records
+    records, probe = merge_pools(config)
+    for _ in range(3):
+        missing_records = max(0, target - len(records))
+        missing_probe = max(0, probe_target - len(probe))
+        if not missing_records and not missing_probe:
+            break
+        logger.info(
+            'pools short %d records and %d probes after merge; topping up '
+            'in process', missing_records, missing_probe,
+        )
+        top_up_function(config, missing_records, missing_probe)
+        records, probe = merge_pools(config)
+    if len(records) < target or len(probe) < probe_target:
         raise SystemExit(
-            'probe pool holds %d of %d records; rerun worker zero to top '
-            'up' % (len(probe), config.bridgesft.probe_records)
+            'pools still hold %d of %d records and %d of %d probes after '
+            'top-up; generation is failing, check the stage logs'
+            % (len(records), target, len(probe), probe_target)
         )
     return records[:target], probe
 
@@ -518,7 +580,7 @@ def run(config, worker_count=1, worker_index=None):
         generate_records(config, worker_count, worker_index)
         return None
     if worker_count > 1:
-        records, probe = merge_pools(config)
+        records, probe = reconcile_pools(config)
     else:
         records, probe = generate_records(config)
     train, holdout = split_records(config, records)
