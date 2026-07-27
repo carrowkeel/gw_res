@@ -6,7 +6,7 @@ chat-style response helpers used by the evaluator.
 """
 
 from .model import GPT, build_config
-from .sftstage import verify_checkpoint_tokenizer
+from .sftstage import checkpoint_model_config, verify_checkpoint_tokenizer
 from .tokenizer import SyntheticTokenizer
 from .utils import normalize_state_dict
 
@@ -31,7 +31,10 @@ class StudentModel:
             tokenizer_path = config.tokenizer_path
         verify_checkpoint_tokenizer(saved, checkpoint_path, tokenizer_path)
         self.tokenizer = SyntheticTokenizer(tokenizer_path)
-        gpt_config = build_config(config.model, saved['vocabulary_size'])
+        gpt_config = build_config(
+            checkpoint_model_config(saved, config.model),
+            saved['vocabulary_size'],
+        )
         self.model = GPT(gpt_config).to(self.device).eval()
         self.model.load_state_dict(normalize_state_dict(saved['model']))
         self.block_size = gpt_config.block_size

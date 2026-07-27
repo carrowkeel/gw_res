@@ -468,6 +468,20 @@ def generate_records(config, worker_count=1, worker_index=None):
     return records, probe
 
 
+def _pool_directory(config):
+    """Return the directory holding this run's record pools.
+
+    bridgesft.source_run_dir points a run at another run tree's pools
+    (the capacity ladder trains every model size on the same records),
+    read-only: a run with a source never generates.
+    """
+    from pathlib import Path
+
+    if config.bridgesft.source_run_dir:
+        return Path(config.bridgesft.source_run_dir) / 'data' / 'bridgesft'
+    return config.bridgesft_data_dir
+
+
 def merge_pools(config):
     """Merge worker shards and top-up files into one deduplicated list.
 
@@ -478,7 +492,7 @@ def merge_pools(config):
     """
     records = []
     seen = set()
-    for path in sorted(config.bridgesft_data_dir.glob('bridgesft*.jsonl')):
+    for path in sorted(_pool_directory(config).glob('bridgesft*.jsonl')):
         shard, _ = _scan_records(path)
         added = 0
         for record in shard:
@@ -491,7 +505,7 @@ def merge_pools(config):
             records.append(record)
             added += 1
         logger.info('merge: %s contributed %d records', path.name, added)
-    probe, _ = _scan_records(config.bridgesft_data_dir / 'probe.jsonl')
+    probe, _ = _scan_records(_pool_directory(config) / 'probe.jsonl')
     return records, probe
 
 
@@ -536,6 +550,15 @@ def reconcile_pools(config, top_up_function=top_up):
     target = config.bridgesft.number_of_dialogues
     probe_target = config.bridgesft.probe_records
     records, probe = merge_pools(config)
+    if config.bridgesft.source_run_dir:
+        if len(records) < target or len(probe) < probe_target:
+            raise SystemExit(
+                'source pools at %s hold %d of %d records and %d of %d '
+                'probes; complete the source run before building on it'
+                % (_pool_directory(config), len(records), target,
+                   len(probe), probe_target)
+            )
+        return records[:target], probe
     for _ in range(3):
         missing_records = max(0, target - len(records))
         missing_probe = max(0, probe_target - len(probe))
@@ -576,13 +599,22 @@ def split_records(config, records):
 
 def run(config, worker_count=1, worker_index=None):
     set_seed(config.project.seed)
-    if worker_index is not None:
+    if config.bridgesft.source_run_dir:
+        if worker_index is not None:
+            logger.info(
+                'source_run_dir is set; pools come from %s and nothing is '
+                'generated here', _pool_directory(config),
+            )
+            return None
+        records, probe = reconcile_pools(config)
+    elif worker_index is not None:
         generate_records(config, worker_count, worker_index)
         return None
-    if worker_count > 1:
+    elif worker_count > 1:
         records, probe = reconcile_pools(config)
     else:
         records, probe = generate_records(config)
+    ensure_directory(config.bridgesft_data_dir)
     train, holdout = split_records(config, records)
 
     source_checkpoint = sftstage.resolve_checkpoint(config.pretrain_dir)

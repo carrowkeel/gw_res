@@ -35,7 +35,7 @@ from . import market, render
 from .config import load_config, to_dict
 from .model import GPT, build_config
 from .pretrain import learning_rate_at
-from .sftstage import verify_checkpoint_tokenizer
+from .sftstage import checkpoint_model_config, verify_checkpoint_tokenizer
 from .tokenizer import SyntheticTokenizer, fingerprint as tokenizer_fingerprint
 from .utils import ensure_directory, get_logger, normalize_state_dict, set_seed
 
@@ -320,19 +320,21 @@ def run(config):
     vocabulary_size = tokenizer.vocabulary_size
 
     checkpoint = None
+    model_config = config.model
     if paths['checkpoint'] is not None and paths['checkpoint'].exists():
         checkpoint = torch.load(paths['checkpoint'], map_location=device)
         verify_checkpoint_tokenizer(
             checkpoint, paths['checkpoint'], paths['tokenizer']
         )
         vocabulary_size = checkpoint['vocabulary_size']
+        model_config = checkpoint_model_config(checkpoint, config.model)
         logger.info('starting from stage-1 checkpoint %s',
                     paths['checkpoint'])
     else:
         logger.warning('no stage-1 checkpoint, starting from random '
                        'initialization (smoke-test mode)')
 
-    gpt_config = build_config(config.model, vocabulary_size)
+    gpt_config = build_config(model_config, vocabulary_size)
     model = GPT(gpt_config).to(device)
     if checkpoint is not None:
         model.load_state_dict(normalize_state_dict(checkpoint['model']))
@@ -430,7 +432,7 @@ def run(config):
             'optimizer': optimizer.state_dict(),
             'step': step,
             'mean_return': mean_return,
-            'model_config': to_dict(config.model),
+            'model_config': to_dict(model_config),
             'vocabulary_size': vocabulary_size,
             'tokenizer_fingerprint': tokenizer_fingerprint(
                 paths['tokenizer']

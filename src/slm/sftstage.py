@@ -78,13 +78,33 @@ def verify_checkpoint_tokenizer(saved, checkpoint_path, tokenizer_path):
         )
 
 
+def checkpoint_model_config(saved, fallback_model_config):
+    """Return the model configuration a checkpoint was built with.
+
+    Checkpoints record their model_config, so a consumer in a different
+    run tree (the gate or the simulator probing a capacity-ladder rung,
+    chat pointed at another run) reconstructs the architecture from the
+    checkpoint itself instead of assuming its own config matches. Old
+    checkpoints without the record fall back to the consumer's config.
+    """
+    from .config import ModelConfig
+
+    stored = saved.get('model_config')
+    if stored:
+        return ModelConfig(**stored)
+    return fallback_model_config
+
+
 def load_checkpoint_model(config, checkpoint_path, device, tokenizer_path=None):
     import torch
 
     saved = torch.load(checkpoint_path, map_location=device)
     if tokenizer_path is not None:
         verify_checkpoint_tokenizer(saved, checkpoint_path, tokenizer_path)
-    gpt_config = build_config(config.model, saved['vocabulary_size'])
+    gpt_config = build_config(
+        checkpoint_model_config(saved, config.model),
+        saved['vocabulary_size'],
+    )
     model = GPT(gpt_config).to(device)
     model.load_state_dict(normalize_state_dict(saved['model']))
     return model, gpt_config

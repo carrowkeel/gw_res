@@ -27,6 +27,8 @@ PRESETS = {
                   embedding_dimension=288, block_size=512),
     'mini': dict(number_of_layers=8, number_of_heads=8,
                  embedding_dimension=384, block_size=1024),
+    'poc-30m': dict(number_of_layers=8, number_of_heads=8,
+                    embedding_dimension=512, block_size=1024),
     'poc-60m': dict(number_of_layers=10, number_of_heads=10,
                     embedding_dimension=640, block_size=1024),
     'poc-150m': dict(number_of_layers=12, number_of_heads=12,
