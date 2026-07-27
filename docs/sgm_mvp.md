@@ -311,6 +311,25 @@ Real data as the transfer test: whether logic learned in the simulation
 applies to problems and texts the model never trained on. Deferred until
 stage 2 works; nothing in stages 1-2 depends on it.
 
+## Capacity ladder
+
+The compaction question - how much the sim can compress into a model of
+a given size - is measured directly: 30M and 150M rungs (configs/t1_30m,
+configs/t1_150m) run alongside the 60M with parameters as the only
+variable. Same corpus (project.corpus_dir), same tokenizer (training is
+byte-deterministic, so per-tree tokenizers are identical artifacts with
+matching fingerprints), same bridge pools (bridgesft.source_run_dir
+reads another tree's records, read-only), same step counts, same
+hyperparameters (a named confound: fixed LR mildly mis-serves the
+endpoints, so a 150M rung underperforming the 60M anywhere indicts the
+LR before capacity). Saturation reads off the existing instruments per
+rung: bridge numbers by digit count, the held-out-axes probe gap, gate
+actionable rate, and sim rolling return against the size-independent
+blind and oracle references; where adjacent rungs' curves coincide,
+capacity is not binding. Checkpoints record their model_config and every
+cross-tree consumer reconstructs the architecture from the checkpoint,
+so one sim config serves every rung.
+
 ## Deferred
 
 - Graph input and output (the graph_*.py pipeline stays dormant): a later

@@ -22,7 +22,10 @@ from . import listener as listener_module
 from . import market, render
 from .config import load_config
 from .model import GPT, build_config
-from .sftstage import resolve_base_checkpoint, verify_checkpoint_tokenizer
+from .sftstage import (
+    checkpoint_model_config, resolve_base_checkpoint,
+    verify_checkpoint_tokenizer,
+)
 from .tokenizer import SyntheticTokenizer
 from .utils import ensure_directory, get_logger, normalize_state_dict
 
@@ -173,7 +176,10 @@ def run(config, checkpoint_path=None):
     tokenizer = SyntheticTokenizer(tokenizer_path)
     saved = torch.load(checkpoint_path, map_location=device)
     verify_checkpoint_tokenizer(saved, checkpoint_path, tokenizer_path)
-    gpt_config = build_config(config.model, saved['vocabulary_size'])
+    gpt_config = build_config(
+        checkpoint_model_config(saved, config.model),
+        saved['vocabulary_size'],
+    )
     model = GPT(gpt_config).to(device)
     model.load_state_dict(normalize_state_dict(saved['model']))
     logger.info('probing %s', checkpoint_path)

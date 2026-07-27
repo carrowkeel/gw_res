@@ -1,0 +1,143 @@
+project:
+  name: sgm-t1-150m
+  out_dir: runs/t1_150m
+  seed: 1337
+  corpus_dir: runs/t1_full-1bba019f/data
+
+generate:
+  default_model: Qwen/Qwen2.5-7B-Instruct
+  type_models: {}
+  text_type_weights:
+    document: 1.0
+    dialogue: 2.0
+  number_of_texts: 1000000
+  number_of_pairs: 0
+  temperature: 1.0
+  top_p: 0.95
+  frequency_penalty: 0.4
+  max_tokens: 1024
+  workers: 16
+  tensor_parallel_size: 1
+  gpu_memory_utilization: 0.90
+  max_model_len: 2048
+  dtype: bfloat16
+  batch_size: 512
+  apply_filter: true
+  deduplicate: true
+  minimum_characters: 200
+
+tokenizer:
+  vocabulary_size: 16000
+  minimum_frequency: 2
+
+model:
+  preset: poc-150m
+  block_size: 1024
+  dropout: 0.05
+  tie_embeddings: true
+
+pretrain:
+  batch_size: 24
+  effective_batch_size: 192
+  gradient_accumulation_steps: 2
+  maximum_steps: 7000
+  learning_rate: 0.0004
+  minimum_learning_rate: 0.00004
+  warmup_steps: 300
+  weight_decay: 0.1
+  gradient_clip: 1.0
+  dtype: bfloat16
+  compile_model: true
+  log_interval: 20
+  evaluation_interval: 200
+  evaluation_iterations: 100
+  checkpoint_interval: 200
+  validation_fraction: 0.005
+  early_stop_patience: 0
+  instruction_fraction: 0.0
+
+commsft:
+  number_of_dialogues: 20000
+  holdout_fraction: 0.02
+  minimum_turns: 5
+  maximum_turns: 8
+  conversation_max_tokens: 360
+  batch_size: 16
+  gradient_accumulation_steps: 2
+  epochs: 2
+  learning_rate: 0.00003
+  minimum_learning_rate: 0.000003
+  warmup_ratio: 0.03
+  replay_fraction: 0.2
+  evaluation_interval: 100
+  log_interval: 20
+
+mathsft:
+  number_of_dialogues: 240000
+  holdout_fraction: 0.005
+  maximum_value: 1000
+  communication_fraction: 0.3
+  numeric_token_weight: 5.0
+  batch_size: 16
+  gradient_accumulation_steps: 2
+  epochs: 1
+  learning_rate: 0.00003
+  minimum_learning_rate: 0.000003
+  warmup_ratio: 0.03
+  replay_fraction: 0.2
+  evaluation_interval: 100
+  log_interval: 20
+
+bridgesft:
+  source_run_dir: runs/t1_full-1bba019f
+  number_of_dialogues: 200000
+  workers: 4
+  qa_fraction: 0.35
+  decision_fraction: 0.2
+  probe_records: 600
+  holdout_fraction: 0.005
+  maximum_value: 1000
+  minimum_turns: 3
+  maximum_turns: 9
+  conversation_max_tokens: 360
+  numeric_token_weight: 5.0
+  batch_size: 16
+  gradient_accumulation_steps: 2
+  epochs: 2
+  learning_rate: 0.00003
+  minimum_learning_rate: 0.000003
+  warmup_ratio: 0.03
+  replay_fraction: 0.2
+  evaluation_interval: 100
+  log_interval: 20
+
+sfteval:
+  max_new_tokens: 64
+  temperature: 0.3
+  top_p: 0.9
+  similarity_threshold: 0.4
+  maximum_examples: 300
+  sample_dump: 25
+
+eval:
+  judge_model: null
+  number_of_generation_samples: 40
+  number_of_probe_questions: 40
+  max_new_tokens: 200
+  temperature: 0.8
+  top_p: 0.95
+  repetition_penalty: 1.0
+  student_gpu_memory_utilization: 0.45
+  judge_gpu_memory_utilization: 0.45
+
+slurm:
+  enabled: true
+  partition: null
+  account: null
+  gres: gpu:l40s:1
+  memory: 64G
+  cpus_per_task: 8
+  time_limit: "24:00:00"
+  pretrain_gres: gpu:l40s:4
+  log_dir: runs/t1_150m/slurm_logs
+  extra_sbatch: []
