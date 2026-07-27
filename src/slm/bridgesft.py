@@ -18,6 +18,13 @@ Record kinds:
 - decision: an interaction whose situation demands a decision, cue either
   asked (the last turn asks what to do) or unasked (the last turn only
   states the urgency), so the response is a commitment either way.
+- briefing: labeled informants report program-fixed facts (holdings with
+  quantities, a forecast, sometimes advice) to a decider, whose reply
+  commits to a program-fixed coherent action in the reason-bearing form:
+  verb, quantity, named thing, and a connective joining the decision to a
+  stated fact. This is the interface shape the simulator's entry gate
+  measures, trained across many domains rather than the market's, so the
+  form generalizes instead of binding to one scene.
 
 A probe pool generated only from held-out registers measures out-of-schema
 transfer; every record carries its axis values so the eval stratifies
@@ -31,6 +38,7 @@ import argparse
 import gc
 import json
 import random
+import re
 
 import numpy
 
@@ -43,9 +51,11 @@ from .utils import ensure_directory, get_logger, set_seed
 
 logger = get_logger('bridgesft')
 
-RECIPE = 2
+RECIPE = 3
 
-AXIS_FIELDS = ['register', 'naming', 'tone', 'arrangement', 'cue', 'form']
+AXIS_FIELDS = [
+    'register', 'naming', 'tone', 'arrangement', 'cue', 'form', 'domain',
+]
 
 META_ANSWER_WORDS = {
     'conversation', 'mentioned', 'specified', 'stated', 'dialogue',
@@ -67,11 +77,133 @@ def sample_axes(random_generator, heldout=False):
 
 def draw_kind(random_generator, bridgesft_config):
     roll = random_generator.random()
-    if roll < bridgesft_config.qa_fraction:
+    boundary = bridgesft_config.qa_fraction
+    if roll < boundary:
         return 'qa'
-    if roll < bridgesft_config.qa_fraction + bridgesft_config.decision_fraction:
+    boundary += bridgesft_config.decision_fraction
+    if roll < boundary:
         return 'decision'
+    boundary += bridgesft_config.briefing_fraction
+    if roll < boundary:
+        return 'briefing'
     return random_generator.choice(sorted(mathsft._KIND_BUILDERS))
+
+
+def build_briefing(random_generator, heldout=False):
+    """Construct one briefing's program-owned facts and decision.
+
+    The forecast's direction fixes a coherent action: a falling value or
+    weak demand divests the subject, a rising one acquires more or holds.
+    Every number, name, justifying fact, and connective is fixed here, so
+    the assembled record cannot commit to an incoherent action or justify
+    it with an unstated fact; the LLM renders language only.
+    """
+    domains = (
+        seeds.HELDOUT_BRIEFING_DOMAINS if heldout
+        else seeds.BRIEFING_DOMAINS
+    )
+    domain = random_generator.choice(domains)
+    period = random_generator.choice(seeds.BRIEFING_PERIODS)
+    count = random_generator.choice([2, 2, 3])
+    if domain.get('proper'):
+        items = []
+        while len(items) < count:
+            name = seeds.invented_name(random_generator)
+            if name not in items:
+                items.append(name)
+    else:
+        count = min(count, len(domain['items']))
+        items = random_generator.sample(domain['items'], count)
+    unit, link = domain['unit'], domain['link']
+    holdings = {item: random_generator.randint(2, 60) for item in items}
+    resource_amount = random_generator.randint(40, 900)
+    numbers = set(holdings.values()) | {resource_amount}
+    subject = random_generator.choice(items)
+    holding_parts = [
+        '%d %s %s %s' % (holdings[item], unit, link, item) for item in items
+    ]
+    held_phrase = (
+        'the holdings stand at' if domain.get('proper')
+        else 'the stock stands at'
+    )
+    status_clause = '%s %s, and %s' % (
+        held_phrase, ' and '.join(holding_parts),
+        domain['resource'] % resource_amount,
+    )
+    direction = random_generator.choice(['up', 'down'])
+    if random_generator.random() < 0.5:
+        movement = 'rise' if direction == 'up' else 'fall'
+        if random_generator.random() < 0.5:
+            price = random_generator.randint(3, 60)
+            numbers.add(price)
+            forecast_clause = (
+                'the %s of %s stands at %d and is expected to %s over '
+                'the next %s' % (
+                    domain['value'], subject, price, movement, period,
+                )
+            )
+        else:
+            forecast_clause = 'the %s of %s is expected to %s next %s' % (
+                domain['value'], subject, movement, period,
+            )
+    else:
+        strength = 'strong' if direction == 'up' else 'weak'
+        forecast_clause = 'demand for %s looks %s for the coming %s' % (
+            subject, strength, period,
+        )
+    if direction == 'down':
+        action = 'divest'
+    else:
+        action = 'acquire' if random_generator.random() < 0.6 else 'hold'
+    hold_target = (
+        '%s %s %s' % (unit, link, subject) if domain.get('proper')
+        else subject
+    )
+    if action == 'hold':
+        verb = None
+        quantity = None
+        decision_clause = 'hold the %s and make no trade' % hold_target
+    else:
+        verb = domain[action]
+        if action == 'divest':
+            quantity = random_generator.randint(1, holdings[subject])
+        else:
+            quantity = random_generator.randint(2, 40)
+        decision_clause = '%s %d %s %s %s' % (
+            verb, quantity, unit, link, subject,
+        )
+    advice_clause = None
+    if random_generator.random() < 0.5:
+        agree = random_generator.random() < 0.6
+        if agree and action == 'acquire':
+            advice_phrase = '%s more %s' % (verb, hold_target)
+        elif agree and action == 'divest':
+            advice_phrase = '%s some of the %s' % (verb, hold_target)
+        elif agree or action == 'divest':
+            advice_phrase = 'hold the %s' % hold_target
+        else:
+            advice_phrase = '%s some of the %s' % (
+                domain['divest'], hold_target,
+            )
+        advice_clause = 'their advice is to %s this %s' % (
+            advice_phrase, period,
+        )
+    return {
+        'domain_key': domain['key'],
+        'subject': subject,
+        'action': action,
+        'verb': verb,
+        'quantity': quantity,
+        'numbers': numbers,
+        'status_clause': status_clause,
+        'forecast_clause': forecast_clause,
+        'advice_clause': advice_clause,
+        'decision_clause': decision_clause,
+        'reason_clause': forecast_clause,
+        'marker': random_generator.choice(
+            ['because', 'since', 'given that']
+        ),
+    }
 
 
 def build_task(random_generator, bridgesft_config, heldout=False):
@@ -105,10 +237,38 @@ def build_task(random_generator, bridgesft_config, heldout=False):
             'exchange' if random_generator.random() < 0.5
             else 'conversation'
         )
+        situations = (
+            seeds.HELDOUT_DECISION_SITUATIONS if heldout
+            else seeds.DECISION_SITUATIONS
+        )
         task['minimum_turns'] = 2
         task['request'] = prompts.build_decision_interaction_prompt(
-            axes, names, random_generator.choice(seeds.DECISION_SITUATIONS),
+            axes, names, random_generator.choice(situations),
             random_generator,
+        )
+    elif kind == 'briefing':
+        brief = build_briefing(random_generator, heldout)
+        axes['cue'] = (
+            'asked' if random_generator.random() < 0.5 else 'unasked'
+        )
+        axes['form'] = 'lead' if random_generator.random() < 0.5 else 'direct'
+        axes['domain'] = brief['domain_key']
+        informant_count = 3 if brief['advice_clause'] else 2
+        names = seeds.sample_speakers(
+            axes['naming'], informant_count + 1, random_generator
+        )
+        task['names'] = names
+        reporting = [brief['forecast_clause']]
+        if brief['advice_clause']:
+            reporting.append(brief['advice_clause'])
+            random_generator.shuffle(reporting)
+        clauses = [brief['status_clause']] + reporting
+        task['lines'] = list(zip(names[:-1], clauses))
+        task['decider'] = names[-1]
+        task['brief'] = brief
+        task['minimum_turns'] = informant_count
+        task['request'] = prompts.build_briefing_prompt(
+            axes, task['lines'], names[-1],
         )
     else:
         axes['arrangement'] = (
@@ -159,9 +319,35 @@ def parse_conversation(task, text, minimum_turns, maximum_turns):
     must contain every operand, spread beyond the question turn (all
     operands inside the final turn is the merged shape wearing a split
     label), and end with the question speaker asking; a decision
-    interaction must end with a question only under the asked cue.
+    interaction must end with a question only under the asked cue. A
+    briefing must carry its labels in the requested order, exactly the
+    program-fixed numbers and no others, and a question only where the
+    asked cue put one.
     """
     kind = task['kind']
+    if kind == 'briefing':
+        turns = prompts.parse_turns(text)
+        if turns is None:
+            lines = text.strip().split('\n')[:-1]
+            turns = prompts.parse_turns('\n'.join(lines))
+        expected = [label for label, _ in task['lines']]
+        if turns is None or len(turns) < len(expected):
+            return None
+        turns = turns[:len(expected)]
+        if [speaker for speaker, _ in turns] != expected:
+            return None
+        joined = _joined(turns)
+        if not acceptable_text(joined):
+            return None
+        if set(sfteval.numeric_values(joined)) != task['brief']['numbers']:
+            return None
+        asking = ['?' in turn_text for _, turn_text in turns]
+        if task['axes']['cue'] == 'asked':
+            if not asking[-1] or any(asking[:-1]):
+                return None
+        elif any(asking):
+            return None
+        return turns
     if kind not in ('qa', 'decision') \
             and task['axes']['arrangement'] == 'merged':
         remark = text.strip().split('\n')[0].strip()
@@ -214,11 +400,17 @@ def parse_conversation(task, text, minimum_turns, maximum_turns):
 
 def build_followup(task, turns, random_generator):
     """Return (responder, second-request prompt) for a parsed conversation."""
+    kind = task['kind']
+    conversation = _joined(turns)
+    if kind == 'briefing':
+        brief = task['brief']
+        return task['decider'], prompts.build_briefing_decision_prompt(
+            conversation, task['decider'], brief['decision_clause'],
+            brief['reason_clause'], brief['marker'], task['axes']['form'],
+        )
     last_speaker = turns[-1][0]
     others = [name for name in task['names'] if name != last_speaker]
     responder = random_generator.choice(others)
-    conversation = _joined(turns)
-    kind = task['kind']
     if kind == 'qa':
         return responder, prompts.build_qa_extraction_prompt(conversation)
     if kind == 'decision':
@@ -266,6 +458,29 @@ def assemble(task, turns, responder, followup_text, random_generator):
             if response.rstrip().endswith('?'):
                 return None
             if not numbers_grounded(record):
+                return None
+        elif kind == 'briefing':
+            if '?' in response:
+                return None
+            brief = task['brief']
+            lowered = response.lower()
+            if brief['marker'] not in lowered:
+                return None
+            if brief['subject'].lower() not in lowered:
+                return None
+            if brief['action'] == 'hold':
+                if not re.search(r'\b(hold|keep)', lowered):
+                    return None
+            elif not re.search(
+                    r'\b%s' % re.escape(brief['verb']), lowered):
+                return None
+            response_values = set(sfteval.numeric_values(response))
+            allowed = set(brief['numbers'])
+            if brief['quantity'] is not None:
+                allowed.add(brief['quantity'])
+                if brief['quantity'] not in response_values:
+                    return None
+            if not response_values <= allowed:
                 return None
         else:
             if not sfteval.numbers_correct(

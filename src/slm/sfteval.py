@@ -22,6 +22,7 @@ import json
 import re
 
 from .config import load_config
+from .listener import reason_given
 from .sftstage import load_checkpoint_model
 from .tokenizer import SyntheticTokenizer
 from .utils import get_logger
@@ -30,7 +31,9 @@ logger = get_logger('sfteval')
 
 _WORD_PATTERN = re.compile(r'[a-z0-9]+')
 
-AXIS_FIELDS = ['register', 'naming', 'tone', 'arrangement', 'cue']
+AXIS_FIELDS = [
+    'register', 'naming', 'tone', 'arrangement', 'cue', 'form', 'domain',
+]
 
 
 def normalize_tokens(text):
@@ -183,11 +186,12 @@ def evaluate_model(model, tokenizer, records, sfteval_config, block_size,
         if row['kind'] is None:
             continue
         entry = kinds.setdefault(row['kind'], {
-            'count': 0, 'answered': 0, 'f1_sum': 0.0,
+            'count': 0, 'answered': 0, 'f1_sum': 0.0, 'reasoned': 0,
             'numeric': 0, 'correct': 0, 'digits': {},
         })
         entry['count'] += 1
         entry['answered'] += int(row['answered'])
+        entry['reasoned'] += int(reason_given(row['prediction']))
         entry['f1_sum'] += row['f1']
         if row['numbers_correct'] is not None:
             entry['numeric'] += 1
@@ -202,6 +206,7 @@ def evaluate_model(model, tokenizer, records, sfteval_config, block_size,
                 'examples': entry['count'],
                 'answered_rate': round(entry['answered'] / entry['count'], 4),
                 'mean_f1': round(entry['f1_sum'] / entry['count'], 4),
+                'reason_rate': round(entry['reasoned'] / entry['count'], 4),
             }
             if entry['numeric']:
                 summary['numbers_correct_rate'] = round(

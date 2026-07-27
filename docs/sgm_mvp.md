@@ -99,6 +99,31 @@ imitating the sim's protocol surface: the behavior class is taught, the
 protocol stays in-context via the exemplar turn, and no gold actions are
 ever trained.
 
+The recipe-2 gate run located the remaining cliff precisely: the free-form
+decision skill transferred (fluent committed turns), but nothing had
+trained the sim's interface shape - a briefing of labeled informant lines
+dense with named things and quantities, answered by a turn carrying verb,
+quantity, entity name, and a reason clause - so actionable and reason
+rates measured 0.0 and the exemplar turn alone could not carry the format
+into a model this size. Recipe 3 adds the briefing kind: labeled
+informants report program-fixed facts (holdings with quantities, a
+forecast, sometimes advice that may agree or conflict) to a decider whose
+reply commits, in one sentence, to a program-fixed action joined to a
+stated fact by a reason connective drawn from the listener's marker set.
+The forecast direction fixes a coherent action (falling value or weak
+demand divests, rising acquires or holds), so the logic is trained along
+with the form. The register is deliberately over-covered rather than
+matched to the market: some 30 domains from produce stalls to expedition
+depots, four of them with invented proper-name entities (shares of named
+ventures, contracts with named firms) so copying a proper noun from
+context into the decision is trained too, cue asked or unasked, reason
+before or after the decision, briefings with and without an advice line -
+a false positive of the register (a reasoned order turn where none was
+demanded) costs little, missing the register cost the whole gate. Held
+out for the probe: registers, decision situations, and briefing domains
+alike. The sim still teaches which action; the bridge now teaches how a
+decision speaks.
+
 Records skew deliberately short, and quality is generated, not filtered
 in: arithmetic drowns in long context, so the merged arrangement is one
 LLM-rendered remark (facts plus question in a single utterance, the

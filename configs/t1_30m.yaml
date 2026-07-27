@@ -92,8 +92,9 @@ bridgesft:
   source_run_dir: runs/t1_full-1bba019f
   number_of_dialogues: 200000
   workers: 4
-  qa_fraction: 0.35
+  qa_fraction: 0.3
   decision_fraction: 0.2
+  briefing_fraction: 0.2
   probe_records: 600
   holdout_fraction: 0.005
   maximum_value: 1000

@@ -188,6 +188,7 @@ class BridgeSftConfig:
     source_run_dir: str = None
     qa_fraction: float = 0.35
     decision_fraction: float = 0.2
+    briefing_fraction: float = 0.2
     probe_records: int = 600
     holdout_fraction: float = 0.005
     maximum_value: int = 1000
