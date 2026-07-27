@@ -683,6 +683,41 @@ def generate_records(config, worker_count=1, worker_index=None):
     return records, probe
 
 
+def clear_pools(config, worker_count=1, worker_index=None):
+    """Delete the pool files this process owns, forcing regeneration.
+
+    Without this, a rerun resumes from whatever same-recipe records are on
+    disk; with it, generation starts clean. Each process clears only what
+    it owns: a single-process run owns every pool file, a worker owns its
+    own shard (worker zero also the probe pool), and the merge-and-train
+    job owns only the top-up file, because by the time it runs the workers
+    have already regenerated their shards and deleting those would destroy
+    fresh data. A run reading a source tree's pools owns nothing and
+    refuses.
+    """
+    if config.bridgesft.source_run_dir:
+        raise SystemExit(
+            'refusing to overwrite: pools are read from %s and belong to '
+            'that run' % _pool_directory(config)
+        )
+    data_directory = config.bridgesft_data_dir
+    if not data_directory.exists():
+        return
+    if worker_index is not None:
+        owned = [_pool_path(config, worker_index)]
+        if worker_index == 0:
+            owned.append(data_directory / 'probe.jsonl')
+    elif worker_count > 1:
+        owned = [data_directory / 'bridgesft_topup.jsonl']
+    else:
+        owned = sorted(data_directory.glob('bridgesft*.jsonl'))
+        owned.append(data_directory / 'probe.jsonl')
+    for path in owned:
+        if path.exists():
+            path.unlink()
+            logger.info('overwrite: removed %s', path)
+
+
 def _pool_directory(config):
     """Return the directory holding this run's record pools.
 
@@ -812,8 +847,10 @@ def split_records(config, records):
     return train, holdout
 
 
-def run(config, worker_count=1, worker_index=None):
+def run(config, worker_count=1, worker_index=None, overwrite=False):
     set_seed(config.project.seed)
+    if overwrite:
+        clear_pools(config, worker_count, worker_index)
     if config.bridgesft.source_run_dir:
         if worker_index is not None:
             logger.info(
@@ -884,11 +921,17 @@ def main():
         help='generate only this worker\'s shard and exit; omit to train '
              '(merging shards when --worker-count is above one)',
     )
+    parser.add_argument(
+        '--overwrite', action='store_true',
+        help='delete the pool files this process owns and regenerate from '
+             'scratch instead of resuming from records already on disk',
+    )
     arguments = parser.parse_args()
     run(
         load_config(arguments.config, run_id=arguments.run_id),
         worker_count=arguments.worker_count,
         worker_index=arguments.worker_index,
+        overwrite=arguments.overwrite,
     )
 
 

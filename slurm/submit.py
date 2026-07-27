@@ -509,6 +509,36 @@ def submit_world(config_path, dry_run, resume=False):
         print('To stop early, scancel the pending gen, merge, and rung jobs.')
 
 
+def _clear_bridgesft_pools(config, dry_run):
+    """Delete the run tree's SFT record pools so generation starts clean.
+
+    Clearing at submission time, from the login node, covers every pool
+    file at once - including stale shards left by a previous run with a
+    different worker count, which no single job could safely own. Without
+    the flag, a resubmission resumes from same-recipe records on disk.
+    """
+    if config.bridgesft.source_run_dir:
+        sys.exit(
+            '--overwrite-sft: this run reads pools from %s; overwrite them '
+            'through the source run itself' % config.bridgesft.source_run_dir
+        )
+    data_directory = Path(config.bridgesft_data_dir)
+    pool_files = []
+    if data_directory.exists():
+        pool_files = sorted(data_directory.glob('bridgesft*.jsonl'))
+        probe = data_directory / 'probe.jsonl'
+        if probe.exists():
+            pool_files.append(probe)
+    if dry_run:
+        print('overwrite-sft (dry run): would remove %d pool files from %s'
+              % (len(pool_files), data_directory))
+        return
+    for path in pool_files:
+        path.unlink()
+    print('overwrite-sft: removed %d pool files from %s'
+          % (len(pool_files), data_directory))
+
+
 def _resolve_run_id(explicit, dry_run):
     """Pick the run id that suffixes this submission's output tree.
 
@@ -557,6 +587,12 @@ def main():
              'pretrain checkpoint, packed replay data); overrides '
              'simtrain.base_run_dir and is baked into the resolved config',
     )
+    parser.add_argument(
+        '--overwrite-sft', action='store_true',
+        help='delete the run tree\'s bridgesft record pools before '
+             'submitting, so generation restarts from scratch instead of '
+             'resuming from records already on disk',
+    )
     arguments = parser.parse_args()
 
     if arguments.resume and not arguments.run_id:
@@ -592,6 +628,11 @@ def main():
             'or set simtrain.base_run_dir in the config'
             % ' and '.join(sorted(needs_base))
         )
+    if arguments.overwrite_sft:
+        if 'bridgesft' not in stages:
+            sys.exit('--overwrite-sft applies to the bridgesft stage; add '
+                     'it to --stages')
+        _clear_bridgesft_pools(config, arguments.dry_run)
     submit(str(resolved_path), stages, arguments.dry_run)
 
 

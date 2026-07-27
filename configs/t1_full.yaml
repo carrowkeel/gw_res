@@ -88,7 +88,7 @@ mathsft:
   log_interval: 20
 
 bridgesft:
-  number_of_dialogues: 200000
+  number_of_dialogues: 400000
   workers: 4
   qa_fraction: 0.3
   decision_fraction: 0.2

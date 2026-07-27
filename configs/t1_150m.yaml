@@ -90,7 +90,7 @@ mathsft:
 
 bridgesft:
   source_run_dir: runs/t1_full-1bba019f
-  number_of_dialogues: 200000
+  number_of_dialogues: 400000
   workers: 4
   qa_fraction: 0.3
   decision_fraction: 0.2
