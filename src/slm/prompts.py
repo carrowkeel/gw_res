@@ -724,3 +724,63 @@ def build_decision_response_prompt(conversation_text, speaker):
         'questions back. Write only %s\'s reply, without the speaker '
         'label.' % (conversation_text, speaker, speaker)
     )
+
+
+def build_briefing_prompt(axes, lines, decider):
+    """Return a request rendering program-fixed briefing facts as turns.
+
+    Every fact, entity name, and number is program-supplied; the request
+    asks only for language around them. Under the asked cue the last
+    reporter closes by asking the decider what to do, so both cued and
+    uncued briefings appear in training.
+    """
+    parts = []
+    for index, (label, clause) in enumerate(lines):
+        parts.append(
+            'Turn %d is %s reporting that %s.' % (index + 1, label, clause)
+        )
+    if axes['cue'] == 'asked':
+        parts.append(
+            'The last turn also ends by asking %s what they should do.'
+            % decider
+        )
+    return (
+        'Write %s: a %s exchange of exactly %d turns in which people '
+        'report a situation to %s, who must act on it. %s Keep each turn '
+        'to one or two short sentences, keep every number and name '
+        'exactly as given, and add no other numbers. %s' % (
+            axes['register'], axes['tone'], len(lines), decider,
+            ' '.join(parts),
+            _speaker_clause([label for label, _ in lines]),
+        )
+    ) + _BEGIN_DIRECTLY
+
+
+def build_briefing_decision_prompt(briefing_text, decider, decision_clause,
+                                   reason_clause, marker, form):
+    """Return the request for the decider's committed, reasoned reply.
+
+    The action, the justifying fact, and the connective are all fixed by
+    the program; the request asks for one natural sentence carrying them,
+    in either order, so the record cannot commit to the wrong action or
+    justify it with an unstated fact.
+    """
+    if form == 'lead':
+        shape = (
+            'Give the reason first and then the decision, joined with the '
+            'word "%s".' % marker
+        )
+    else:
+        shape = (
+            'State the decision first and then the reason, joined with '
+            'the word "%s".' % marker
+        )
+    return (
+        'Here is an exchange:\n\n%s\n\n%s now replies, committing to '
+        'exactly this action: %s. The reason, given in the same reply, is '
+        'that %s. %s One sentence in the voice of the exchange, keeping '
+        'every number and name exactly as given, with no hedging and no '
+        'questions. Write only %s\'s reply, without the speaker label.'
+        % (briefing_text, decider, decision_clause, reason_clause, shape,
+           decider)
+    )
