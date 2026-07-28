@@ -407,27 +407,6 @@ def run(config):
                 model.count_parameters() / 1e6, block_size)
 
     checkpoint_directory = ensure_directory(config.simtrain_dir)
-    if (simtrain_config.entry_threshold > 0
-            and not (checkpoint_directory / 'ckpt_last.pt').exists()):
-        from . import gate as gate_module
-
-        gate_report = gate_module.probe(
-            model, tokenizer, config, block_size, device
-        )
-        gate_module.write_report(
-            gate_report, checkpoint_directory / 'gate_report.json'
-        )
-        if not gate_report['passes']:
-            raise SystemExit(
-                'entry gate: actionable rate %.3f is below threshold %.2f; '
-                'the base model is not ready for simulation training (see '
-                'gate_report.json; train the bridging stages further or '
-                'lower simtrain.entry_threshold deliberately)' % (
-                    gate_report['actionable_rate'],
-                    simtrain_config.entry_threshold,
-                )
-            )
-
     replay = None
     if simtrain_config.replay_fraction > 0:
         replay = _load_replay(paths, block_size)
@@ -646,9 +625,10 @@ def run(config):
                 raise SystemExit(
                     'aborting: %d consecutive steps without actionable '
                     'signal (no executed trades with earnings variance); '
-                    'the model is not engaging the market - check '
-                    'gate_report.json, the bridging stages, and the entry '
-                    'difficulty before rerunning' % no_signal_streak
+                    'the model is not engaging the market - run the gate '
+                    'stage on the base checkpoint and check the bridging '
+                    'stages and the entry difficulty before rerunning'
+                    % no_signal_streak
                 )
         else:
             no_signal_streak = 0

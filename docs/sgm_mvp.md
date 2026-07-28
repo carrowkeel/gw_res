@@ -340,9 +340,11 @@ stage-1 data into stage-2 batches (machinery already built in finetune.py
 as replay_fraction); and the entry gate (gate.py), which measures the
 genuine actionable rate — the fraction of trader turns the pattern parser
 can act on from the raw text alone, with no reason gate and no charitable
-rewriting. The simulator probes the base checkpoint before its first step
-and refuses to start below simtrain.entry_threshold; the same probe runs
-standalone (the gate stage) to measure where any checkpoint stands. The
+rewriting. The gate runs as its own stage against
+simtrain.entry_threshold, writing its report next to the probed
+checkpoint; the simulator itself does not probe at startup, so gating a
+checkpoint is a step taken before submitting the sim run rather than a
+cost paid inside it. The
 simulator builds on the furthest bridging stage the base run completed
 (mathsft, then commsft, then pretrain).
 
