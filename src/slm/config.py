@@ -250,6 +250,11 @@ class SimTrainConfig:
     listener_mode: str = 'pattern'
     listener_model: str = None
     no_reason_action_probability: float = 0.5
+    language_score_trigger: float = 3.5
+    language_score_window: int = 20
+    correction_score_threshold: int = 3
+    correction_buffer_size: int = 512
+    correction_fraction: float = 0.3
     protocol_line: bool = True
     entry_threshold: float = 0.25
     entry_probe_games: int = 16

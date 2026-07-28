@@ -41,6 +41,11 @@ simtrain:
   max_decision_tokens: 48
   listener_mode: llm
   listener_model: Qwen/Qwen2.5-3B-Instruct
+  language_score_trigger: 3.5
+  language_score_window: 20
+  correction_score_threshold: 3
+  correction_buffer_size: 512
+  correction_fraction: 0.3
   render_mode: template
   log_interval: 10
   checkpoint_interval: 100
