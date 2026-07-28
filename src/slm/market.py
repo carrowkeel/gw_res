@@ -197,13 +197,16 @@ def apply_actions(state, actions):
     return executed
 
 
-def step_game(market, state, actions, random_generator):
+def step_game(market, state, actions, random_generator,
+              noise_sigma=NOISE_SIGMA):
     """Advance one quarter: trade, resolve pending shocks, report the next.
 
     Actions are applied at current prices, then the pre-sampled shocks move
     prices, and the score is the resulting change in portfolio value. New
     shocks are then sampled for the following quarter and partially leaked
-    as the next state's reports.
+    as the next state's reports. Randomness consumption is independent of
+    the actions taken, so games sharing a generator seed see identical
+    shock and report streams whatever the trader does.
     """
     value_before = portfolio_value(state)
     executed = apply_actions(state, actions)
@@ -212,7 +215,7 @@ def step_game(market, state, actions, random_generator):
         change = (
             DEMAND_WEIGHT * shocks[company['demand_factor']]
             - COST_WEIGHT * shocks[company['cost_factor']]
-            + random_generator.gauss(0.0, NOISE_SIGMA)
+            + random_generator.gauss(0.0, noise_sigma)
         )
         price = state['prices'][company['name']]
         state['prices'][company['name']] = max(1.0, price + change)
@@ -287,7 +290,8 @@ def oracle_policy(market, state, random_generator):
     return actions
 
 
-def play_game(policy, seed, quarters=12, field_count=3, companies_per_field=2):
+def play_game(policy, seed, quarters=12, field_count=3,
+              companies_per_field=2, noise_sigma=NOISE_SIGMA):
     """Play one full game under a policy; return total and per-step earnings."""
     random_generator = random.Random(seed)
     market = sample_market(random_generator, field_count, companies_per_field)
@@ -295,7 +299,8 @@ def play_game(policy, seed, quarters=12, field_count=3, companies_per_field=2):
     earnings_by_quarter = []
     for _ in range(quarters):
         actions = policy(market, state, random_generator)
-        earnings, _ = step_game(market, state, actions, random_generator)
+        earnings, _ = step_game(market, state, actions, random_generator,
+                                noise_sigma)
         earnings_by_quarter.append(earnings)
     return sum(earnings_by_quarter), earnings_by_quarter
 

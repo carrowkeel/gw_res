@@ -13,17 +13,23 @@ A replay fraction of stage-1 packed text keeps language anchored at the
 gradient level.
 
 Language reinforcement guards against the register eroding under
-score-weighted self-imitation. In llm listener mode the listener scores
-each turn's grammar and coherence and returns a minimal correction -
-repetition and pathologies repaired, the trader's own words kept - so the
-imitation target stays the model's voice rather than the listener's.
-Corrections of low-scoring turns accumulate in a rolling buffer, sampled
-uniformly at random: selection by move score would couple language
-training to earnings luck, and the outcome pathway already owns the
-decision signal. When the windowed mean listener score falls below
-language_score_trigger, correction batches mix into the update, including
-on no-signal steps, where imitative repair is the only way out of the
-degrade-into-silence spiral.
+score-weighted self-imitation, with prevention ahead of cure. Prevention:
+a turn is eligible for imitation weight only if it executed, gave a
+reason, and cleared the imitation score floor when scored - lucky garbage
+acts in the world but is never imitated. Cure: in llm listener mode the
+listener scores each turn's grammar and coherence and returns a minimal
+correction - repetition and pathologies repaired, the trader's own words
+kept - and corrections of low-scoring turns enter a rolling buffer only
+when they themselves carry a reason and state a valid move, so a
+degenerate policy cannot refill the buffer with its own collapse. The
+buffer is sampled uniformly at random: selection by move score would
+couple language training to earnings luck, and the outcome pathway
+already owns the decision signal. The first full window of scores sets a
+baseline; when the windowed mean falls language_score_drop below it,
+correction batches mix into the update, including on no-signal steps,
+where imitative repair is the only way out of the degrade-into-silence
+spiral. A rehearsal fraction of bridge records anchors the register at
+the gradient level the way stage-1 replay anchors base prose.
 
 The base model, tokenizer, and replay data come from a completed stage-1
 run via simtrain.base_run_dir; without it the model starts from random
@@ -89,6 +95,36 @@ def _load_replay(paths, block_size):
     return PackedDataset(train_path, meta['dtype'], block_size)
 
 
+def _load_rehearsal(simtrain_config, tokenizer, block_size):
+    """Bridge records as a rehearsal dataset anchoring the register.
+
+    Stage-1 replay anchors base prose but the reason-bearing register
+    lives only in the bridge pools, so a fraction of bridge records is
+    rehearsed with response-only loss through the same dataset the
+    bridging stage trained on.
+    """
+    from .sftstage import PlainPairDataset
+
+    if not simtrain_config.base_run_dir:
+        return None
+    records_path = (Path(simtrain_config.base_run_dir) / 'data'
+                    / 'bridgesft' / 'train.jsonl')
+    if not records_path.exists():
+        logger.warning('no bridge records at %s, rehearsal disabled',
+                       records_path)
+        return None
+    records = []
+    with open(records_path) as handle:
+        for line in handle:
+            records.append(json.loads(line))
+            if len(records) >= simtrain_config.rehearsal_records:
+                break
+    dataset = PlainPairDataset(records, tokenizer, block_size)
+    logger.info('rehearsal: %d bridge records from %s', dataset.length(),
+                records_path)
+    return dataset
+
+
 def _generate_decisions(model, tokenizer, games, simtrain_config,
                         block_size, device):
     """Generate every game's trader turn in one batched call.
@@ -141,11 +177,25 @@ def _difficulty_at(simtrain_config, step):
     return field_count, companies_per_field
 
 
-def _admissible_correction(correction, decision):
-    """A correction may drop numbers from the turn but never invent any."""
+def _admissible_correction(correction, decision, turn_market, turn_state):
+    """Whether a correction may enter the buffer: the interface form only.
+
+    It must keep to the turn's numbers (drop, never invent), carry a
+    reason, and state a valid move - a parseable order or a stated hold.
+    Without this floor the buffer tracks a degenerate policy downward:
+    a repetitive but grammatical turn survives minimal correction intact
+    and returns as an imitation target of its own collapse.
+    """
     corrected = set(re.findall(r'\d+', correction))
     original = set(re.findall(r'\d+', decision))
-    return corrected <= original
+    if not corrected <= original:
+        return False
+    if not listener_module.reason_given(correction):
+        return False
+    actions, _ = listener_module.parse_orders(
+        correction, turn_market, turn_state
+    )
+    return bool(actions) or listener_module.hold_stated(correction)
 
 
 def _play_batch(model, tokenizer, config, llm_listener, step, block_size,
@@ -156,33 +206,53 @@ def _play_batch(model, tokenizer, config, llm_listener, step, block_size,
     listener can interpret every game's turn in one batched call. When a
     correction buffer is given, admissible corrections of low-scoring
     turns are appended to it together with their game context.
+
+    With market_repeats above one, consecutive games share a world seed:
+    the market's randomness consumption is action-independent, so repeats
+    see identical shocks, prices, and reports, and differ only in the
+    model's sampled decisions. Rendering draws from a separate per-game
+    generator so wording variation cannot desynchronize the worlds.
     """
     simtrain_config = config.simtrain
     field_count, companies_per_field = _difficulty_at(simtrain_config, step)
+    repeats = max(1, simtrain_config.market_repeats)
     games = []
     for game_index in range(simtrain_config.games_per_batch):
+        world_index = game_index // repeats
+        world_random = random.Random(
+            config.project.seed + step * 100003 + world_index * 1009
+        )
         game_random = random.Random(
-            config.project.seed + step * 100003 + game_index
+            config.project.seed + step * 100003 + game_index + 500009
         )
         game_market = market.sample_market(
-            game_random, field_count, companies_per_field,
+            world_random, field_count, companies_per_field,
         )
         games.append({
             'random': game_random,
+            'world_random': world_random,
+            'world': world_index,
             'market': game_market,
-            'state': market.start_game(game_market, game_random),
+            'state': market.start_game(game_market, world_random),
             'token_ids': [tokenizer.bos_id],
             'spans': [],
             'earnings': [],
             'acted': [],
+            'eligible': [],
             'turn_records': [],
         })
-    stats = {'turns': 0, 'no_reason': 0, 'acted': 0,
+    stats = {'turns': 0, 'no_reason': 0, 'acted': 0, 'eligible': 0,
              'match_exact': 0, 'match_fuzzy': 0, 'match_none': 0,
              'advisor_earnings': [], 'no_advisor_earnings': [],
-             'language_scores': [],
+             'language_scores': [], 'decisions': [],
+             'corrections_offered': 0, 'corrections_admitted': 0,
              'generate_seconds': 0.0, 'listener_seconds': 0.0}
     gate_random = random.Random(config.project.seed + step * 100003 + 7)
+    no_reason_probability = simtrain_config.no_reason_action_probability
+    if simtrain_config.no_reason_anneal_steps > 0:
+        no_reason_probability *= max(
+            0.0, 1.0 - step / simtrain_config.no_reason_anneal_steps
+        )
     sample_turn = None
     for quarter in range(simtrain_config.quarters):
         for game in games:
@@ -208,15 +278,13 @@ def _play_batch(model, tokenizer, config, llm_listener, step, block_size,
         phase_started = time.time()
         if llm_listener is not None:
             results = llm_listener.interpret_batch(
-                turns, simtrain_config.no_reason_action_probability,
-                gate_random,
+                turns, no_reason_probability, gate_random,
             )
         else:
             results = [
                 listener_module.interpret(
                     text, turn_market, turn_state,
-                    simtrain_config.no_reason_action_probability,
-                    gate_random,
+                    no_reason_probability, gate_random,
                 )
                 for text, turn_market, turn_state in turns
             ]
@@ -225,6 +293,7 @@ def _play_batch(model, tokenizer, config, llm_listener, step, block_size,
             sample_turn = (turns[0][0], results[0])
         for game, turn, result in zip(games, turns, results):
             stats['turns'] += 1
+            stats['decisions'].append(turn[0])
             if not result['reason_given']:
                 stats['no_reason'] += 1
             if result['acted']:
@@ -236,29 +305,42 @@ def _play_batch(model, tokenizer, config, llm_listener, step, block_size,
                 stats['language_scores'].append(score)
             if (correction_buffer is not None and correction
                     and score is not None
-                    and score <= simtrain_config.correction_score_threshold
-                    and _admissible_correction(correction, turn[0])):
-                corrected_ids = tokenizer.encode(' ' + correction)
-                span_start = game['spans'][-1][0]
-                context_limit = max(1, block_size + 1 - len(corrected_ids))
-                correction_buffer.append({
-                    'context': game['token_ids'][:span_start]
-                    [-context_limit:],
-                    'turn': corrected_ids,
-                })
-                while (len(correction_buffer)
-                       > simtrain_config.correction_buffer_size):
-                    correction_buffer.pop(0)
+                    and score <= simtrain_config.correction_score_threshold):
+                stats['corrections_offered'] += 1
+                if _admissible_correction(correction, turn[0], turn[1],
+                                          turn[2]):
+                    stats['corrections_admitted'] += 1
+                    corrected_ids = tokenizer.encode(' ' + correction)
+                    span_start = game['spans'][-1][0]
+                    context_limit = max(
+                        1, block_size + 1 - len(corrected_ids)
+                    )
+                    correction_buffer.append({
+                        'context': game['token_ids'][:span_start]
+                        [-context_limit:],
+                        'turn': corrected_ids,
+                    })
+                    while (len(correction_buffer)
+                           > simtrain_config.correction_buffer_size):
+                        correction_buffer.pop(0)
             advisor_present = any(
                 report['source'] == 'advisor'
                 for report in game['state']['reports']
             )
             earnings, executed = market.step_game(
                 game['market'], game['state'], result['actions'],
-                game['random'],
+                game['world_random'], simtrain_config.market_noise_sigma,
             )
             game['earnings'].append(earnings)
             game['acted'].append(bool(executed))
+            eligible = (
+                bool(executed) and result['reason_given']
+                and (score is None
+                     or simtrain_config.imitation_score_floor <= 0
+                     or score >= simtrain_config.imitation_score_floor)
+            )
+            game['eligible'].append(eligible)
+            stats['eligible'] += int(eligible)
             if advisor_present:
                 stats['advisor_earnings'].append(earnings)
             else:
@@ -281,24 +363,55 @@ def _play_batch(model, tokenizer, config, llm_listener, step, block_size,
 def _batch_tensors(games, simtrain_config, block_size, device):
     """Turn played games into padded input, target, and weight tensors.
 
-    Only turns that executed an action carry loss. Their quarter earnings
-    are normalized across the batch's acted turns and mapped through
+    Only eligible turns carry loss: the turn executed an action, gave a
+    reason, and cleared the imitation score floor when scored. A lucky
+    but reasonless or degraded turn can act in the world but is never
+    imitated. Advantages are normalized and mapped through
     max(0, exp(z) - 1), so a neutral- or negative-advantage turn
     contributes nothing at all: the loss imitates only decisions that
-    scored above the batch, never chatter and never inaction. This is the
-    correction to the first pilots, where weights centered at one imitated
-    every turn at full strength and self-imitation of chatter collapsed
-    the model.
-    """
-    import torch
+    scored above their baseline, never chatter and never inaction. This
+    is the correction to the first pilots, where weights centered at one
+    imitated every turn at full strength and self-imitation of chatter
+    collapsed the model.
 
-    acted_earnings = [
-        earnings for game in games
-        for earnings, acted in zip(game['earnings'], game['acted'])
-        if acted
+    With market_repeats above one, a turn's baseline is the mean earnings
+    of the same quarter across the games sharing its world, so shared
+    world luck cancels and the advantage measures the decision; without
+    repeats the baseline is the batch mean over eligible turns.
+    """
+    repeats = max(1, simtrain_config.market_repeats)
+    if repeats > 1:
+        groups = {}
+        for game in games:
+            for quarter, earnings in enumerate(game['earnings']):
+                groups.setdefault((game['world'], quarter),
+                                  []).append(earnings)
+        baselines = {
+            key: statistics.mean(values) for key, values in groups.items()
+        }
+
+        def advantage_of(game, quarter):
+            return (game['earnings'][quarter]
+                    - baselines[(game['world'], quarter)])
+    else:
+        eligible_earnings = [
+            earnings for game in games
+            for earnings, eligible in zip(game['earnings'],
+                                          game['eligible'])
+            if eligible
+        ]
+        mean = statistics.mean(eligible_earnings)
+
+        def advantage_of(game, quarter):
+            return game['earnings'][quarter] - mean
+
+    eligible_advantages = [
+        advantage_of(game, quarter)
+        for game in games
+        for quarter, eligible in enumerate(game['eligible'])
+        if eligible
     ]
-    mean = statistics.mean(acted_earnings)
-    spread = statistics.pstdev(acted_earnings)
+    spread = statistics.pstdev(eligible_advantages)
     spread = spread if spread > 1e-6 else 1.0
     rows = []
     for game in games:
@@ -306,11 +419,11 @@ def _batch_tensors(games, simtrain_config, block_size, device):
         offset = max(0, len(token_ids) - (block_size + 1))
         token_ids = token_ids[offset:]
         weights = [0.0] * (len(token_ids) - 1)
-        for (span_start, span_end), earnings, acted in zip(
-                game['spans'], game['earnings'], game['acted']):
-            if not acted:
+        for quarter, ((span_start, span_end), eligible) in enumerate(
+                zip(game['spans'], game['eligible'])):
+            if not eligible:
                 continue
-            normalized = (earnings - mean) / spread
+            normalized = advantage_of(game, quarter) / spread
             weight = math.exp(
                 normalized / simtrain_config.weight_temperature
             )
@@ -358,13 +471,15 @@ def _reference_returns(simtrain_config, seed, field_count,
     blind = statistics.mean(
         market.play_game(market.blind_policy, seed + index,
                          simtrain_config.quarters, field_count,
-                         companies_per_field)[0]
+                         companies_per_field,
+                         simtrain_config.market_noise_sigma)[0]
         for index in range(sample_games)
     )
     oracle = statistics.mean(
         market.play_game(market.oracle_policy, seed + index,
                          simtrain_config.quarters, field_count,
-                         companies_per_field)[0]
+                         companies_per_field,
+                         simtrain_config.market_noise_sigma)[0]
         for index in range(sample_games)
     )
     return blind, oracle
@@ -411,9 +526,14 @@ def run(config):
     if simtrain_config.replay_fraction > 0:
         replay = _load_replay(paths, block_size)
     replay_random = numpy.random.default_rng(config.project.seed + 11)
+    rehearsal = None
+    if simtrain_config.rehearsal_fraction > 0:
+        rehearsal = _load_rehearsal(simtrain_config, tokenizer, block_size)
+    rehearsal_random = random.Random(config.project.seed + 17)
     correction_buffer = []
     correction_random = random.Random(config.project.seed + 13)
     language_window = []
+    language_baseline = None
 
     llm_listener = None
     if simtrain_config.listener_mode == 'llm':
@@ -452,6 +572,7 @@ def run(config):
         base_model.load_state_dict(normalize_state_dict(saved['model']))
         optimizer.load_state_dict(saved['optimizer'])
         start_step = saved['step'] + 1
+        language_baseline = saved.get('language_baseline')
         logger.info('resumed from step %d', start_step)
 
     reference_cache = {}
@@ -478,6 +599,7 @@ def run(config):
             'optimizer': optimizer.state_dict(),
             'step': step,
             'mean_return': mean_return,
+            'language_baseline': language_baseline,
             'model_config': to_dict(model_config),
             'vocabulary_size': vocabulary_size,
             'tokenizer_fingerprint': tokenizer_fingerprint(
@@ -512,14 +634,15 @@ def run(config):
         )
         model.train()
 
-        acted_earnings = [
+        eligible_earnings = [
             earnings for game in games
-            for earnings, acted in zip(game['earnings'], game['acted'])
-            if acted
+            for earnings, eligible in zip(game['earnings'],
+                                          game['eligible'])
+            if eligible
         ]
         no_signal = (
-            len(acted_earnings) < 2
-            or statistics.pstdev(acted_earnings) < 1e-6
+            len(eligible_earnings) < 2
+            or statistics.pstdev(eligible_earnings) < 1e-6
         )
         step_language_score = (
             statistics.mean(stats['language_scores'])
@@ -529,10 +652,17 @@ def run(config):
             language_window.append(step_language_score)
             if len(language_window) > simtrain_config.language_score_window:
                 language_window.pop(0)
+        if (language_baseline is None
+                and len(language_window)
+                >= simtrain_config.language_score_window):
+            language_baseline = statistics.mean(language_window)
+            logger.info('language baseline %.2f over first %d scored steps',
+                        language_baseline,
+                        simtrain_config.language_score_window)
         language_active = (
-            len(language_window) >= simtrain_config.language_score_window
+            language_baseline is not None
             and statistics.mean(language_window)
-            < simtrain_config.language_score_trigger
+            < language_baseline - simtrain_config.language_score_drop
         )
         correction_count = (
             min(len(correction_buffer),
@@ -543,6 +673,7 @@ def run(config):
         update_started = time.time()
         game_loss = None
         replay_loss = None
+        rehearsal_loss = None
         correction_loss = None
         loss = None
         weights = None
@@ -576,6 +707,37 @@ def run(config):
                             (1.0 - simtrain_config.replay_fraction)
                             * game_loss
                             + simtrain_config.replay_fraction * replay_loss
+                        )
+                    if rehearsal is not None:
+                        count = max(
+                            1, int(simtrain_config.games_per_batch
+                                   * simtrain_config.rehearsal_fraction)
+                        )
+                        indices = [
+                            rehearsal_random.randrange(rehearsal.length())
+                            for _ in range(count)
+                        ]
+                        rehearsal_batch = rehearsal.collate(indices, device)
+                        rehearsal_inputs, rehearsal_labels, \
+                            rehearsal_weights = rehearsal_batch
+                        rehearsal_targets = rehearsal_labels.clamp(min=0)
+                        rehearsal_logits, _ = model(
+                            rehearsal_inputs, rehearsal_targets
+                        )
+                        rehearsal_per_token = functional.cross_entropy(
+                            rehearsal_logits.view(
+                                -1, rehearsal_logits.size(-1)),
+                            rehearsal_targets.view(-1), reduction='none',
+                        ).view_as(rehearsal_weights)
+                        rehearsal_loss = (
+                            (rehearsal_per_token * rehearsal_weights).sum()
+                            / rehearsal_weights.sum()
+                        )
+                        loss = (
+                            (1.0 - simtrain_config.rehearsal_fraction)
+                            * loss
+                            + simtrain_config.rehearsal_fraction
+                            * rehearsal_loss
                         )
                 else:
                     no_signal = True
@@ -647,19 +809,31 @@ def run(config):
             'field_count': field_count,
             'companies_per_field': companies_per_field,
             'no_signal': no_signal,
-            'updated': not no_signal,
+            'updated': loss is not None,
             'mean_return': round(mean_return, 2),
             'rolling_return': round(rolling, 2),
             'no_reason_rate': round(stats['no_reason'] / stats['turns'], 3),
             'acted_rate': round(stats['acted'] / stats['turns'], 3),
+            'eligible_rate': round(stats['eligible'] / stats['turns'], 3),
+            'distinct_decision_rate': round(
+                len(set(stats['decisions'])) / stats['turns'], 3),
             'match_exact_rate': round(
                 stats['match_exact'] / stats['turns'], 3),
             'match_fuzzy_rate': round(
                 stats['match_fuzzy'] / stats['turns'], 3),
+            'corrections_offered': stats['corrections_offered'],
+            'corrections_admitted': stats['corrections_admitted'],
             'generate_seconds': round(stats['generate_seconds'], 2),
             'listener_seconds': round(stats['listener_seconds'], 2),
             'update_seconds': round(update_seconds, 2),
         }
+        if language_baseline is not None:
+            row['language_baseline'] = round(language_baseline, 2)
+        if simtrain_config.no_reason_anneal_steps > 0:
+            row['no_reason_probability'] = round(
+                simtrain_config.no_reason_action_probability
+                * max(0.0, 1.0
+                      - step / simtrain_config.no_reason_anneal_steps), 3)
         if loss is not None:
             row['loss'] = round(loss.item(), 4)
         if game_loss is not None:
@@ -671,6 +845,8 @@ def run(config):
                                  if len(positive_weights) else 0.0)
         if replay_loss is not None:
             row['replay_loss'] = round(replay_loss.item(), 4)
+        if rehearsal_loss is not None:
+            row['rehearsal_loss'] = round(rehearsal_loss.item(), 4)
         if step_language_score is not None:
             row['language_score'] = round(step_language_score, 2)
         row['language_training'] = bool(correction_count)
@@ -701,13 +877,16 @@ def run(config):
         if step % simtrain_config.log_interval == 0:
             elapsed = time.time() - interval_start
             logger.info(
-                'step %d/%d  game %s  replay %s  language %s%s%s  return '
-                '%+.1f (rolling %+.1f, blind %+.1f, oracle %+.1f)  '
-                'no-reason %.2f  acted %.2f  match %.2f/%.2f  %.2fs/it '
-                '(generate %.1f, listener %.1f, update %.1f)',
+                'step %d/%d  game %s  replay %s  rehearse %s  language '
+                '%s%s%s  return %+.1f (rolling %+.1f, blind %+.1f, oracle '
+                '%+.1f)  no-reason %.2f  acted %.2f  eligible %.2f  '
+                'distinct %.2f  match %.2f/%.2f  %.2fs/it (generate %.1f, '
+                'listener %.1f, update %.1f)',
                 step, simtrain_config.maximum_steps,
                 '%.3f' % game_loss.item() if game_loss is not None else '-',
                 '%.3f' % replay_loss.item() if replay_loss is not None
+                else '-',
+                '%.3f' % rehearsal_loss.item() if rehearsal_loss is not None
                 else '-',
                 '%.2f' % step_language_score
                 if step_language_score is not None else '-',
@@ -719,6 +898,8 @@ def run(config):
                 mean_return, rolling, blind_reference, oracle_reference,
                 stats['no_reason'] / stats['turns'],
                 stats['acted'] / stats['turns'],
+                stats['eligible'] / stats['turns'],
+                len(set(stats['decisions'])) / stats['turns'],
                 stats['match_exact'] / stats['turns'],
                 stats['match_fuzzy'] / stats['turns'],
                 elapsed / max(1, simtrain_config.log_interval),
