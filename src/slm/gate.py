@@ -12,7 +12,9 @@ trade or a stated hold; a sell of shares the trader does not hold is not
 one, though the match label still records whether it named a real
 company. The simulator refuses
 to start below simtrain.entry_threshold; the module also runs standalone
-after any stage to measure where a checkpoint stands.
+after any stage to measure where a checkpoint stands, writing
+gate_report.json next to the probed checkpoint so reports from different
+runs never overwrite each other.
 
     python -m slm.gate --config configs/sim.yaml --base-run runs/<t1-tree>
 """
@@ -30,7 +32,7 @@ from .sftstage import (
     verify_checkpoint_tokenizer,
 )
 from .tokenizer import SyntheticTokenizer
-from .utils import ensure_directory, get_logger, normalize_state_dict
+from .utils import get_logger, normalize_state_dict
 
 logger = get_logger('gate')
 
@@ -200,7 +202,7 @@ def run(config, checkpoint_path=None):
     )
     report = {'checkpoint': str(checkpoint_path), **report}
     write_report(
-        report, ensure_directory(config.simtrain_dir) / 'gate_report.json'
+        report, Path(checkpoint_path).parent / 'gate_report.json'
     )
     return report
 
