@@ -297,19 +297,38 @@ the listener's language-quality score covers it behaviorally.
 
 **Language reinforcement.** The behavioral cover is a loop of its own,
 because score-weighted self-imitation can amplify degraded language that
-happened to earn. In llm listener mode the listener grades each turn's
-grammar and coherence (1-5, never the quality of the trade) and returns a
-minimal correction — repetition and pathologies repaired, the trader's own
-words, names, and numbers kept — so the imitation target stays the model's
-voice rather than the listener's, and a correction that invents numbers is
-rejected outright. Corrections of low-scoring turns accumulate in a
-rolling buffer sampled uniformly at random: selecting by move score would
-couple language training to earnings luck, and the outcome pathway already
-owns the decision signal. When the windowed mean score falls below the
-trigger, correction batches mix into the update as an imitative fraction,
-including on no-signal steps — imitative repair is the only exit from the
-spiral where degraded language stops producing actions and the outcome
-loss goes silent. When the window recovers, the mix stands down.
+happened to earn. Prevention comes first: a turn is eligible for
+imitation weight only if it executed, gave a reason, and cleared the
+imitation score floor when scored, so lucky garbage acts in the world but
+is never imitated. The cure is the correction channel: in llm listener
+mode the listener grades each turn's grammar and coherence (1-5, never
+the quality of the trade) and returns a minimal correction — repetition
+and pathologies repaired, the trader's own words, names, and numbers
+kept — so the imitation target stays the model's voice rather than the
+listener's. A correction enters the rolling buffer only if it keeps to
+the turn's numbers, carries a reason, and states a valid move: the first
+sim run with this loop collapsed to a repeated grammatical stub because
+minimal correction preserves grammatical degeneracy, and an unfloored
+buffer tracked the collapse downward as uniform self-imitation — the
+first-pilot failure returning through the back door. The buffer is
+sampled uniformly at random (selection by move score would couple
+language training to earnings luck), the trigger is relative — the first
+full window of scores sets a baseline and correction batches mix in when
+the windowed mean drops below it — and a rehearsal fraction of bridge
+records anchors the register at the gradient level the way stage-1
+replay anchors base prose. Whether this loop earns its keep is measured,
+not assumed: per-step history logs the language score against its
+baseline, the distinct-decision rate (the collapse gauge that needs no
+listener), the eligible rate, and corrections offered against admitted.
+
+**Outcome noise.** The chance to earn without deciding well is kept low
+so slightly-correct is distinguishable from random. Two levers: the
+price-noise sigma is configurable per run and set below the factor
+weights, and market_repeats plays each sampled world several times with
+an identical shock stream (market randomness is action-independent by
+construction), scoring each turn against the mean of its siblings'
+matching quarter — shared world luck cancels, and the advantage measures
+the decision alone.
 
 The weighting withholds imitation rather than merely modulating it, the
 lesson of the first pilots (weights centered at one imitated every turn

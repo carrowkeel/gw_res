@@ -113,7 +113,8 @@ def probe(model, tokenizer, config, block_size, device, games_count=None):
                     'reason_given': has_reason,
                 })
             earnings, _ = market.step_game(
-                game['market'], game['state'], actions, game['random']
+                game['market'], game['state'], actions, game['random'],
+                simtrain_config.market_noise_sigma,
             )
             game['earnings'] += earnings
     blind_reference, oracle_reference = _reference_returns(
