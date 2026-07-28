@@ -4,10 +4,13 @@ The first sim pilots showed the cost of starting below threshold: a model
 that never produces an actionable turn gives the outcome loss nothing to
 amplify, and score-weighted self-imitation of chatter collapses it. The
 gate plays frozen probe games (no updates, no listener LLM) and measures
-the genuine actionable rate: the fraction of trader turns the pattern
-parser can act on from the raw text alone, with no reason gate and no
-charitable rewriting - the charity that inflated acted rates in the failed
-pilot is deliberately excluded from the measurement. The simulator refuses
+the genuine actionable rate: the fraction of trader turns that state a
+valid move from the raw text alone, with no reason gate and no charitable
+rewriting - the charity that inflated acted rates in the failed pilot is
+deliberately excluded from the measurement. A valid move is an executable
+trade or a stated hold; a sell of shares the trader does not hold is not
+one, though the match label still records whether it named a real
+company. The simulator refuses
 to start below simtrain.entry_threshold; the module also runs standalone
 after any stage to measure where a checkpoint stands.
 
@@ -65,6 +68,7 @@ def probe(model, tokenizer, config, block_size, device, games_count=None):
     turns = 0
     actionable = 0
     with_reason = 0
+    holds = 0
     match_counts = {'exact': 0, 'fuzzy': 0, 'none': 0}
     samples = []
     model.eval()
@@ -87,15 +91,21 @@ def probe(model, tokenizer, config, block_size, device, games_count=None):
                 decision_text, game['market'], game['state']
             )
             has_reason = listener_module.reason_given(decision_text)
+            held = (
+                not actions
+                and listener_module.hold_stated(decision_text)
+            )
             turns += 1
-            actionable += int(bool(actions))
+            actionable += int(bool(actions) or held)
             with_reason += int(has_reason)
+            holds += int(held)
             match_counts[match] += 1
             if len(samples) < SAMPLE_LIMIT:
                 samples.append({
                     'quarter': quarter + 1,
                     'decision': decision_text,
                     'actions': actions,
+                    'hold': held,
                     'match': match,
                     'reason_given': has_reason,
                 })
@@ -120,6 +130,7 @@ def probe(model, tokenizer, config, block_size, device, games_count=None):
         'oracle_reference': round(oracle_reference, 2),
         'turns': turns,
         'actionable_rate': round(actionable / turns, 4) if turns else 0.0,
+        'hold_rate': round(holds / turns, 4) if turns else 0.0,
         'reason_rate': round(with_reason / turns, 4) if turns else 0.0,
         'match_exact_rate': (
             round(match_counts['exact'] / turns, 4) if turns else 0.0
@@ -140,12 +151,13 @@ def write_report(report, path):
     with open(path, 'w') as handle:
         json.dump(report, handle, indent=2)
     logger.info(
-        'gate: actionable %.3f (threshold %.2f, %s), reason %.3f, match '
-        '%.3f/%.3f, return %+.1f (blind %+.1f, oracle %+.1f) at %dx%d '
-        'over %d turns -> %s',
+        'gate: actionable %.3f (threshold %.2f, %s), hold %.3f, reason '
+        '%.3f, match %.3f/%.3f, return %+.1f (blind %+.1f, oracle %+.1f) '
+        'at %dx%d over %d turns -> %s',
         report['actionable_rate'], report['entry_threshold'],
         'passes' if report['passes'] else 'BELOW THRESHOLD',
-        report['reason_rate'], report['match_exact_rate'],
+        report['hold_rate'], report['reason_rate'],
+        report['match_exact_rate'],
         report['match_fuzzy_rate'], report['mean_return'],
         report['blind_reference'], report['oracle_reference'],
         report['field_count'], report['companies_per_field'],

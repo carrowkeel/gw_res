@@ -23,7 +23,12 @@ import re
 REASON_MARKERS = ['because', 'since ', 'as the', 'as it', 'given that']
 
 _ORDER_PATTERN = re.compile(
-    r'\b(buy|sell)\b(?:ing)?\s+(?:(\d+|all)\s+)?(?:shares?\s+(?:of\s+)?)?',
+    r'\b(buy|sell)(?:ing)?\b\s+(?:(\d+|all)\s+)?(?:shares?\s+(?:of\s+)?)?',
+    re.IGNORECASE,
+)
+
+_HOLD_PATTERN = re.compile(
+    r'\bhold\b(?!\s+steady)|\bkeep\b(?!\s+an\s+eye)|\bno\s+trades?\b',
     re.IGNORECASE,
 )
 
@@ -42,6 +47,17 @@ LISTENER_SYSTEM_PROMPT = (
 def reason_given(text):
     lowered = text.lower()
     return any(marker in lowered for marker in REASON_MARKERS)
+
+
+def hold_stated(text):
+    """Whether the text states a deliberate hold, in the trained wording.
+
+    The bridge teaches holds as 'hold the X and make no trade' with hold or
+    keep as the verb, so those words mark the intent; the price-forecast
+    phrase 'hold steady' and the idiom 'keep an eye' are excluded because
+    they describe the market, not a move.
+    """
+    return bool(_HOLD_PATTERN.search(text))
 
 
 def _match_company(fragment, companies):
@@ -65,20 +81,22 @@ def parse_orders(text, market, state):
 
     Returns (actions, match) where match is the weakest company-match
     quality seen (exact before fuzzy before none) so callers can track how
-    canonical the output was.
+    canonical the output was. The match label reflects company naming
+    alone: an order that names a real company but fails the feasibility
+    clamp keeps its match so reports can tell an infeasible order from an
+    unparseable one.
     """
     actions = []
     ranking = {'exact': 0, 'fuzzy': 1, 'none': 2}
-    worst = 'exact'
+    worst = None
     for found in _ORDER_PATTERN.finditer(text):
         verb = found.group(1).lower()
         quantity_word = found.group(2)
         tail = text[found.end():found.end() + 60]
         company, match = _match_company(tail, market['companies'])
         if company is None:
-            worst = 'none' if not actions else worst
             continue
-        if ranking[match] > ranking[worst]:
+        if worst is None or ranking[match] > ranking[worst]:
             worst = match
         if quantity_word is None:
             quantity = 1
@@ -96,9 +114,7 @@ def parse_orders(text, market, state):
             actions.append(
                 {'action': verb, 'company': company, 'quantity': quantity}
             )
-    if not actions:
-        worst = 'none'
-    return actions, worst
+    return actions, worst or 'none'
 
 
 def _gate_passes(has_reason, no_reason_probability, random_generator):
