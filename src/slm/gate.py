@@ -10,11 +10,12 @@ rewriting - the charity that inflated acted rates in the failed pilot is
 deliberately excluded from the measurement. A valid move is an executable
 trade or a stated hold; a sell of shares the trader does not hold is not
 one, though the match label still records whether it named a real
-company. The simulator refuses
-to start below simtrain.entry_threshold; the module also runs standalone
-after any stage to measure where a checkpoint stands, writing
-gate_report.json next to the probed checkpoint so reports from different
-runs never overwrite each other.
+company. The gate runs as its own
+stage, before simulation training or after any bridging stage, and judges
+the actionable rate against simtrain.entry_threshold; the simulator
+itself no longer probes at startup, so passing the gate is a decision
+made outside the training run. Reports are written next to the probed
+checkpoint so runs never overwrite each other.
 
     python -m slm.gate --config configs/sim.yaml --base-run runs/<t1-tree>
 """
