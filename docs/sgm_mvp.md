@@ -295,6 +295,22 @@ loss operator already in use; no policy-gradient RL. A replay fraction of
 stage-1 text in every batch anchors language at the gradient level, while
 the listener's language-quality score covers it behaviorally.
 
+**Language reinforcement.** The behavioral cover is a loop of its own,
+because score-weighted self-imitation can amplify degraded language that
+happened to earn. In llm listener mode the listener grades each turn's
+grammar and coherence (1-5, never the quality of the trade) and returns a
+minimal correction — repetition and pathologies repaired, the trader's own
+words, names, and numbers kept — so the imitation target stays the model's
+voice rather than the listener's, and a correction that invents numbers is
+rejected outright. Corrections of low-scoring turns accumulate in a
+rolling buffer sampled uniformly at random: selecting by move score would
+couple language training to earnings luck, and the outcome pathway already
+owns the decision signal. When the windowed mean score falls below the
+trigger, correction batches mix into the update as an imitative fraction,
+including on no-signal steps — imitative repair is the only exit from the
+spiral where degraded language stops producing actions and the outcome
+loss goes silent. When the window recovers, the mix stands down.
+
 The weighting withholds imitation rather than merely modulating it, the
 lesson of the first pilots (weights centered at one imitated every turn
 at full strength, and uniform self-imitation of chatter collapsed the

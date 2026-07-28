@@ -12,6 +12,19 @@ toward the decisions that scored well. There are no gold actions anywhere.
 A replay fraction of stage-1 packed text keeps language anchored at the
 gradient level.
 
+Language reinforcement guards against the register eroding under
+score-weighted self-imitation. In llm listener mode the listener scores
+each turn's grammar and coherence and returns a minimal correction -
+repetition and pathologies repaired, the trader's own words kept - so the
+imitation target stays the model's voice rather than the listener's.
+Corrections of low-scoring turns accumulate in a rolling buffer, sampled
+uniformly at random: selection by move score would couple language
+training to earnings luck, and the outcome pathway already owns the
+decision signal. When the windowed mean listener score falls below
+language_score_trigger, correction batches mix into the update, including
+on no-signal steps, where imitative repair is the only way out of the
+degrade-into-silence spiral.
+
 The base model, tokenizer, and replay data come from a completed stage-1
 run via simtrain.base_run_dir; without it the model starts from random
 initialization, which is only useful for smoke tests.
@@ -23,6 +36,7 @@ import argparse
 import json
 import math
 import random
+import re
 import statistics
 import time
 from contextlib import nullcontext
@@ -127,12 +141,21 @@ def _difficulty_at(simtrain_config, step):
     return field_count, companies_per_field
 
 
+def _admissible_correction(correction, decision):
+    """A correction may drop numbers from the turn but never invent any."""
+    corrected = set(re.findall(r'\d+', correction))
+    original = set(re.findall(r'\d+', decision))
+    return corrected <= original
+
+
 def _play_batch(model, tokenizer, config, llm_listener, step, block_size,
-                device):
+                device, correction_buffer=None):
     """Play games_per_batch games in lockstep; return games and turn stats.
 
     Lockstep (all games advance one quarter together) exists so the llm
-    listener can interpret every game's turn in one batched call.
+    listener can interpret every game's turn in one batched call. When a
+    correction buffer is given, admissible corrections of low-scoring
+    turns are appended to it together with their game context.
     """
     simtrain_config = config.simtrain
     field_count, companies_per_field = _difficulty_at(simtrain_config, step)
@@ -157,6 +180,7 @@ def _play_batch(model, tokenizer, config, llm_listener, step, block_size,
     stats = {'turns': 0, 'no_reason': 0, 'acted': 0,
              'match_exact': 0, 'match_fuzzy': 0, 'match_none': 0,
              'advisor_earnings': [], 'no_advisor_earnings': [],
+             'language_scores': [],
              'generate_seconds': 0.0, 'listener_seconds': 0.0}
     gate_random = random.Random(config.project.seed + step * 100003 + 7)
     sample_turn = None
@@ -206,6 +230,25 @@ def _play_batch(model, tokenizer, config, llm_listener, step, block_size,
             if result['acted']:
                 stats['acted'] += 1
             stats['match_%s' % result['match']] += 1
+            score = result['language_score']
+            correction = result['correction']
+            if score is not None:
+                stats['language_scores'].append(score)
+            if (correction_buffer is not None and correction
+                    and score is not None
+                    and score <= simtrain_config.correction_score_threshold
+                    and _admissible_correction(correction, turn[0])):
+                corrected_ids = tokenizer.encode(' ' + correction)
+                span_start = game['spans'][-1][0]
+                context_limit = max(1, block_size + 1 - len(corrected_ids))
+                correction_buffer.append({
+                    'context': game['token_ids'][:span_start]
+                    [-context_limit:],
+                    'turn': corrected_ids,
+                })
+                while (len(correction_buffer)
+                       > simtrain_config.correction_buffer_size):
+                    correction_buffer.pop(0)
             advisor_present = any(
                 report['source'] == 'advisor'
                 for report in game['state']['reports']
@@ -224,6 +267,8 @@ def _play_batch(model, tokenizer, config, llm_listener, step, block_size,
                 'quarter': quarter + 1,
                 'decision': turn[0],
                 'rewrite': result['rewrite'],
+                'language_score': result['language_score'],
+                'correction': result['correction'],
                 'reason_given': result['reason_given'],
                 'match': result['match'],
                 'executed': executed,
@@ -277,6 +322,12 @@ def _batch_tensors(games, simtrain_config, block_size, device):
                 if 0 <= position < len(weights):
                     weights[position] = weight
         rows.append((token_ids, weights))
+    return _pad_rows(rows, device)
+
+
+def _pad_rows(rows, device):
+    import torch
+
     longest = max(len(token_ids) for token_ids, _ in rows)
     inputs = torch.zeros((len(rows), longest - 1), dtype=torch.long)
     targets = torch.zeros((len(rows), longest - 1), dtype=torch.long)
@@ -287,6 +338,19 @@ def _batch_tensors(games, simtrain_config, block_size, device):
         targets[row_index, :length] = torch.tensor(token_ids[1:])
         weight_tensor[row_index, :length] = torch.tensor(weights)
     return (inputs.to(device), targets.to(device), weight_tensor.to(device))
+
+
+def _correction_tensors(samples, block_size, device):
+    """Tensors for correction imitation: loss on corrected turns only."""
+    rows = []
+    for sample in samples:
+        token_ids = (sample['context'] + sample['turn'])[-(block_size + 1):]
+        weights = [0.0] * (len(token_ids) - 1)
+        turn_start = len(token_ids) - len(sample['turn'])
+        for position in range(max(0, turn_start - 1), len(weights)):
+            weights[position] = 1.0
+        rows.append((token_ids, weights))
+    return _pad_rows(rows, device)
 
 
 def _reference_returns(simtrain_config, seed, field_count,
@@ -368,6 +432,9 @@ def run(config):
     if simtrain_config.replay_fraction > 0:
         replay = _load_replay(paths, block_size)
     replay_random = numpy.random.default_rng(config.project.seed + 11)
+    correction_buffer = []
+    correction_random = random.Random(config.project.seed + 13)
+    language_window = []
 
     llm_listener = None
     if simtrain_config.listener_mode == 'llm':
@@ -461,7 +528,8 @@ def run(config):
 
         model.eval()
         games, stats, sample_turn = _play_batch(
-            model, tokenizer, config, llm_listener, step, block_size, device
+            model, tokenizer, config, llm_listener, step, block_size,
+            device, correction_buffer,
         )
         model.train()
 
@@ -474,18 +542,39 @@ def run(config):
             len(acted_earnings) < 2
             or statistics.pstdev(acted_earnings) < 1e-6
         )
+        step_language_score = (
+            statistics.mean(stats['language_scores'])
+            if stats['language_scores'] else None
+        )
+        if step_language_score is not None:
+            language_window.append(step_language_score)
+            if len(language_window) > simtrain_config.language_score_window:
+                language_window.pop(0)
+        language_active = (
+            len(language_window) >= simtrain_config.language_score_window
+            and statistics.mean(language_window)
+            < simtrain_config.language_score_trigger
+        )
+        correction_count = (
+            min(len(correction_buffer),
+                max(1, int(simtrain_config.games_per_batch
+                           * simtrain_config.correction_fraction)))
+            if language_active and correction_buffer else 0
+        )
         update_started = time.time()
         game_loss = None
         replay_loss = None
+        correction_loss = None
         loss = None
         weights = None
-        if not no_signal:
+        if not no_signal or correction_count:
             optimizer.zero_grad(set_to_none=True)
             with autocast:
-                inputs, targets, weights = _batch_tensors(
-                    games, simtrain_config, block_size, device
-                )
-                if weights.sum() > 0:
+                if not no_signal:
+                    inputs, targets, weights = _batch_tensors(
+                        games, simtrain_config, block_size, device
+                    )
+                if weights is not None and weights.sum() > 0:
                     logits, _ = model(inputs, targets)
                     per_token = functional.cross_entropy(
                         logits.view(-1, logits.size(-1)), targets.view(-1),
@@ -511,6 +600,36 @@ def run(config):
                         )
                 else:
                     no_signal = True
+                if correction_count:
+                    samples = correction_random.sample(
+                        correction_buffer, correction_count
+                    )
+                    correction_batch = _correction_tensors(
+                        samples, block_size, device
+                    )
+                    correction_inputs, correction_targets, \
+                        correction_weights = correction_batch
+                    correction_logits, _ = model(
+                        correction_inputs, correction_targets
+                    )
+                    correction_per_token = functional.cross_entropy(
+                        correction_logits.view(
+                            -1, correction_logits.size(-1)),
+                        correction_targets.view(-1), reduction='none',
+                    ).view_as(correction_weights)
+                    correction_loss = (
+                        (correction_per_token * correction_weights).sum()
+                        / correction_weights.sum()
+                    )
+                    if loss is None:
+                        loss = correction_loss
+                    else:
+                        loss = (
+                            (1.0 - simtrain_config.correction_fraction)
+                            * loss
+                            + simtrain_config.correction_fraction
+                            * correction_loss
+                        )
             if loss is not None:
                 loss.backward()
                 if simtrain_config.gradient_clip > 0:
@@ -572,6 +691,12 @@ def run(config):
                                  if len(positive_weights) else 0.0)
         if replay_loss is not None:
             row['replay_loss'] = round(replay_loss.item(), 4)
+        if step_language_score is not None:
+            row['language_score'] = round(step_language_score, 2)
+        row['language_training'] = bool(correction_count)
+        row['correction_buffer'] = len(correction_buffer)
+        if correction_loss is not None:
+            row['correction_loss'] = round(correction_loss.item(), 4)
         if stats['advisor_earnings']:
             row['return_with_advisor'] = round(
                 statistics.mean(stats['advisor_earnings']), 2)
@@ -596,15 +721,20 @@ def run(config):
         if step % simtrain_config.log_interval == 0:
             elapsed = time.time() - interval_start
             logger.info(
-                'step %d/%d  game %s  replay %s%s  return %+.1f (rolling '
-                '%+.1f, blind %+.1f, oracle %+.1f)  no-reason %.2f  acted '
-                '%.2f  match %.2f/%.2f  %.2fs/it (generate %.1f, listener '
-                '%.1f, update %.1f)',
+                'step %d/%d  game %s  replay %s  language %s%s%s  return '
+                '%+.1f (rolling %+.1f, blind %+.1f, oracle %+.1f)  '
+                'no-reason %.2f  acted %.2f  match %.2f/%.2f  %.2fs/it '
+                '(generate %.1f, listener %.1f, update %.1f)',
                 step, simtrain_config.maximum_steps,
                 '%.3f' % game_loss.item() if game_loss is not None else '-',
                 '%.3f' % replay_loss.item() if replay_loss is not None
                 else '-',
-                '  NO-SIGNAL (no update, streak %d)' % no_signal_streak
+                '%.2f' % step_language_score
+                if step_language_score is not None else '-',
+                ' CORRECTING (%.3f over %d)' % (
+                    correction_loss.item(), correction_count,
+                ) if correction_loss is not None else '',
+                '  NO-SIGNAL (streak %d)' % no_signal_streak
                 if no_signal else '',
                 mean_return, rolling, blind_reference, oracle_reference,
                 stats['no_reason'] / stats['turns'],

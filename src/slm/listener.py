@@ -23,25 +23,77 @@ import re
 REASON_MARKERS = ['because', 'since ', 'as the', 'as it', 'given that']
 
 _ORDER_PATTERN = re.compile(
-    r'\b(buy|sell)\b(?:ing)?\s+(?:(\d+|all)\s+)?(?:shares?\s+(?:of\s+)?)?',
+    r'\b(buy|sell)(?:ing)?\b\s+(?:(\d+|all)\s+)?(?:shares?\s+(?:of\s+)?)?',
+    re.IGNORECASE,
+)
+
+_HOLD_PATTERN = re.compile(
+    r'\bhold\b(?!\s+steady)|\bkeep\b(?!\s+an\s+eye)|\bno\s+trades?\b',
     re.IGNORECASE,
 )
 
 LISTENER_SYSTEM_PROMPT = (
-    'You translate a trader\'s instruction into exact orders. Reply with '
+    'You review one turn spoken by a trader and translate it into exact '
+    'orders. Reply with three parts, each starting on its own line. '
+    'First a line SCORE: <number>, a whole number from 1 to 5 grading '
+    'only the grammar and coherence of the trader\'s wording, never the '
+    'quality of the trade. Second a line FIX: <sentence>, a minimally '
+    'corrected version of the turn: repair repetition, broken grammar, '
+    'and cut-off endings while keeping the trader\'s own words, order, '
+    'names, and numbers wherever possible, never inventing a different '
+    'trade; if the wording is already clean, repeat it unchanged. Third, '
     'one line per order in exactly this form: ORDER: buy <quantity> '
     '<company> or ORDER: sell <quantity> <company>, using only company '
     'names from the given list and whole-number quantities. Interpret '
     'charitably: if the trader plainly wants to trade a company, produce '
     'the order even if the wording is loose; use quantity 1 if none is '
     'given, and the word all for selling an entire holding. If no trade '
-    'is intended, reply ORDER: none. Output only ORDER lines.'
+    'is intended, reply ORDER: none.'
 )
 
 
 def reason_given(text):
     lowered = text.lower()
     return any(marker in lowered for marker in REASON_MARKERS)
+
+
+def hold_stated(text):
+    """Whether the text states a deliberate hold, in the trained wording.
+
+    The bridge teaches holds as 'hold the X and make no trade' with hold or
+    keep as the verb, so those words mark the intent; the price-forecast
+    phrase 'hold steady' and the idiom 'keep an eye' are excluded because
+    they describe the market, not a move.
+    """
+    return bool(_HOLD_PATTERN.search(text))
+
+
+def parse_review(rewrite):
+    """Split a listener reply into (score, correction, order text).
+
+    Score is clamped to 1..5 and None when absent; correction is None when
+    absent or empty. The returned order text holds only the ORDER lines so
+    trade words inside the correction sentence are never parsed as orders;
+    when the reply carries no ORDER line at all the whole reply is
+    returned, which keeps an older-style plain reply parseable.
+    """
+    score = None
+    correction = None
+    order_lines = []
+    for line in rewrite.splitlines():
+        stripped = line.strip()
+        upper = stripped.upper()
+        if upper.startswith('SCORE:'):
+            digits = re.search(r'\d+', stripped)
+            if digits:
+                score = max(1, min(5, int(digits.group())))
+        elif upper.startswith('FIX:'):
+            candidate = stripped[len('FIX:'):].strip()
+            correction = candidate or None
+        elif upper.startswith('ORDER:'):
+            order_lines.append(stripped)
+    order_text = '\n'.join(order_lines) if order_lines else rewrite
+    return score, correction, order_text
 
 
 def _match_company(fragment, companies):
@@ -65,20 +117,22 @@ def parse_orders(text, market, state):
 
     Returns (actions, match) where match is the weakest company-match
     quality seen (exact before fuzzy before none) so callers can track how
-    canonical the output was.
+    canonical the output was. The match label reflects company naming
+    alone: an order that names a real company but fails the feasibility
+    clamp keeps its match so reports can tell an infeasible order from an
+    unparseable one.
     """
     actions = []
     ranking = {'exact': 0, 'fuzzy': 1, 'none': 2}
-    worst = 'exact'
+    worst = None
     for found in _ORDER_PATTERN.finditer(text):
         verb = found.group(1).lower()
         quantity_word = found.group(2)
         tail = text[found.end():found.end() + 60]
         company, match = _match_company(tail, market['companies'])
         if company is None:
-            worst = 'none' if not actions else worst
             continue
-        if ranking[match] > ranking[worst]:
+        if worst is None or ranking[match] > ranking[worst]:
             worst = match
         if quantity_word is None:
             quantity = 1
@@ -96,9 +150,7 @@ def parse_orders(text, market, state):
             actions.append(
                 {'action': verb, 'company': company, 'quantity': quantity}
             )
-    if not actions:
-        worst = 'none'
-    return actions, worst
+    return actions, worst or 'none'
 
 
 def _gate_passes(has_reason, no_reason_probability, random_generator):
@@ -122,10 +174,12 @@ def interpret(text, market, state, no_reason_probability=0.0,
     has_reason = reason_given(text)
     if not _gate_passes(has_reason, no_reason_probability, random_generator):
         return {'actions': [], 'reason_given': has_reason, 'match': 'none',
-                'acted': False, 'rewrite': None}
+                'acted': False, 'rewrite': None, 'language_score': None,
+                'correction': None}
     actions, match = parse_orders(text, market, state)
     return {'actions': actions, 'reason_given': has_reason, 'match': match,
-            'acted': bool(actions), 'rewrite': None}
+            'acted': bool(actions), 'rewrite': None, 'language_score': None,
+            'correction': None}
 
 
 def _rewrite_prompt(text, market, state):
@@ -180,7 +234,8 @@ class LlmListener:
             else:
                 results[index] = {'actions': [], 'reason_given': has_reason,
                                   'match': 'none', 'acted': False,
-                                  'rewrite': None}
+                                  'rewrite': None, 'language_score': None,
+                                  'correction': None}
         if pending:
             self._ensure_engine()
             from .generate import _chat
@@ -193,7 +248,8 @@ class LlmListener:
             )
             for index, rewrite in zip(pending, rewrites):
                 text, market, state = turns[index]
-                actions, match = parse_orders(rewrite, market, state)
+                score, correction, order_text = parse_review(rewrite)
+                actions, match = parse_orders(order_text, market, state)
                 if actions:
                     direct, direct_match = parse_orders(text, market, state)
                     if direct != actions:
@@ -201,5 +257,7 @@ class LlmListener:
                 results[index] = {'actions': actions,
                                   'reason_given': reasons[index],
                                   'match': match, 'acted': bool(actions),
-                                  'rewrite': rewrite}
+                                  'rewrite': rewrite,
+                                  'language_score': score,
+                                  'correction': correction}
         return results
