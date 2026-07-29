@@ -1,21 +1,19 @@
-"""The forgiving listener: gate and interpret trader turns into orders.
+"""The listener: gate and interpret trader turns, review their language.
 
 The listener sits between the SGM's free-text decision turn and the
 simulator. It gates on the reason-bearing format (a decision must carry a
 reason; a bare decision is not acted on) but does not grade the reason:
-flawed reasoning still acts. Interpretation is deliberately charitable so
-that near-miss outputs still move the game and outcome signal is nonzero
-from the first games; strictness is a dial to be tightened over training
-and eventually removed.
+flawed reasoning still acts. Orders are always parsed from the trader's
+raw text by the pattern machinery: charitable rewriting of vague turns
+into trades was the dial to be tightened over training, and it was
+removed the moment a model passed the entry gate on raw text, after a
+run learned to trade the charity instead of the market. Every result
+carries a match label (exact, fuzzy, none) whose rates are the progress
+metric toward canonical output.
 
-Two modes. The pattern mode parses with regular expressions and fuzzy
-company matching, runs anywhere, and is the smoke-test and strict
-end-state form. The llm mode asks the translator LLM to rewrite the
-trader's message into canonical order lines first, then parses those with
-the same machinery, which is what makes the interface a slope rather than
-a cliff for a weakly trained model. Every result carries a match label
-(exact, fuzzy, none) whose rates are the progress metric toward canonical
-output.
+The review LLM has one remaining job: grade each turn's grammar and
+coherence and return a minimal correction. It never touches the order
+path.
 """
 
 import re
@@ -32,23 +30,16 @@ _HOLD_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
-LISTENER_SYSTEM_PROMPT = (
-    'You review one turn spoken by a trader and translate it into exact '
-    'orders. Reply with three parts, each starting on its own line. '
-    'First a line SCORE: <number>, a whole number from 1 to 5 grading '
+REVIEW_SYSTEM_PROMPT = (
+    'You review one turn spoken by a trader. Reply with exactly two '
+    'lines. First SCORE: <number>, a whole number from 1 to 5 grading '
     'only the grammar and coherence of the trader\'s wording, never the '
-    'quality of the trade. Second a line FIX: <sentence>, a minimally '
-    'corrected version of the turn: repair repetition, broken grammar, '
-    'and cut-off endings while keeping the trader\'s own words, order, '
-    'names, and numbers wherever possible, never inventing a different '
-    'trade; if the wording is already clean, repeat it unchanged. Third, '
-    'one line per order in exactly this form: ORDER: buy <quantity> '
-    '<company> or ORDER: sell <quantity> <company>, using only company '
-    'names from the given list and whole-number quantities. Interpret '
-    'charitably: if the trader plainly wants to trade a company, produce '
-    'the order even if the wording is loose; use quantity 1 if none is '
-    'given, and the word all for selling an entire holding. If no trade '
-    'is intended, reply ORDER: none.'
+    'quality of the trade; repetitive or broken wording scores 1. Second '
+    'FIX: <sentence>, a minimally corrected version of the turn: repair '
+    'repetition, broken grammar, and cut-off endings while keeping the '
+    'trader\'s own words, order, names, and numbers wherever possible, '
+    'never inventing a different trade; if the wording is already clean, '
+    'repeat it unchanged. Output nothing after the FIX line.'
 )
 
 
@@ -68,32 +59,45 @@ def hold_stated(text):
     return bool(_HOLD_PATTERN.search(text))
 
 
-def parse_review(rewrite):
-    """Split a listener reply into (score, correction, order text).
+def repetitive(text):
+    """Whether a turn repeats itself: any four-word run occurring twice.
 
-    Score is clamped to 1..5 and None when absent; correction is None when
-    absent or empty. The returned order text holds only the ORDER lines so
-    trade words inside the correction sentence are never parsed as orders;
-    when the reply carries no ORDER line at all the whole reply is
-    returned, which keeps an older-style plain reply parseable.
+    The collapse signature is a repeated order stub. An ordinary decision
+    sentence does not repeat a four-word run, so this is the
+    program-owned degeneracy test that the review LLM's compressed score
+    scale cannot provide.
+    """
+    words = re.findall(r"[a-z0-9']+", text.lower())
+    seen = set()
+    for index in range(len(words) - 3):
+        gram = tuple(words[index:index + 4])
+        if gram in seen:
+            return True
+        seen.add(gram)
+    return False
+
+
+def parse_review(reply):
+    """Split a review reply into (score, correction), first labels win.
+
+    Score is clamped to 1..5 and None when absent; correction is None
+    when absent or empty. The reviewing LLM sometimes appends a
+    hallucinated second review block, so the first occurrence of each
+    label is kept and later ones ignored.
     """
     score = None
     correction = None
-    order_lines = []
-    for line in rewrite.splitlines():
+    for line in reply.splitlines():
         stripped = line.strip()
         upper = stripped.upper()
-        if upper.startswith('SCORE:'):
+        if upper.startswith('SCORE:') and score is None:
             digits = re.search(r'\d+', stripped)
             if digits:
                 score = max(1, min(5, int(digits.group())))
-        elif upper.startswith('FIX:'):
+        elif upper.startswith('FIX:') and correction is None:
             candidate = stripped[len('FIX:'):].strip()
             correction = candidate or None
-        elif upper.startswith('ORDER:'):
-            order_lines.append(stripped)
-    order_text = '\n'.join(order_lines) if order_lines else rewrite
-    return score, correction, order_text
+    return score, correction
 
 
 def _match_company(fragment, companies):
@@ -182,7 +186,7 @@ def interpret(text, market, state, no_reason_probability=0.0,
             'correction': None}
 
 
-def _rewrite_prompt(text, market, state):
+def _review_prompt(text, market, state):
     company_names = ', '.join(
         company['name'] for company in market['companies']
     )
@@ -197,12 +201,13 @@ def _rewrite_prompt(text, market, state):
 
 
 class LlmListener:
-    """Charitable interpretation through the translator LLM.
+    """Language review through the listener LLM: score and minimal fix.
 
-    The LLM rewrites each trader turn into canonical ORDER lines, and the
-    pattern machinery parses those. Loading vLLM is deferred to the first
-    call so the class can be constructed anywhere. Turns are interpreted in
-    batches, one rewrite call per turn, batched through the engine.
+    Orders never pass through here: they are parsed from the trader's raw
+    text by the pattern machinery, so the reviewer's charity cannot
+    ground a vague turn into a trade. Loading vLLM is deferred to the
+    first call so the class can be constructed anywhere. Turns are
+    reviewed one call per turn, batched through the engine.
     """
 
     def __init__(self, model_name, generate_config):
@@ -219,45 +224,18 @@ class LlmListener:
                 self.model_name, self.generate_config
             )
 
-    def interpret_batch(self, turns, no_reason_probability=0.0,
-                        random_generator=None):
-        """Interpret [(text, market, state), ...] into result dicts."""
-        results = [None] * len(turns)
-        pending = []
-        reasons = {}
-        for index, (text, market, state) in enumerate(turns):
-            has_reason = reason_given(text)
-            reasons[index] = has_reason
-            if _gate_passes(has_reason, no_reason_probability,
-                            random_generator):
-                pending.append(index)
-            else:
-                results[index] = {'actions': [], 'reason_given': has_reason,
-                                  'match': 'none', 'acted': False,
-                                  'rewrite': None, 'language_score': None,
-                                  'correction': None}
-        if pending:
-            self._ensure_engine()
-            from .generate import _chat
+    def review_batch(self, turns):
+        """Score and minimally correct [(text, market, state), ...]."""
+        self._ensure_engine()
+        from .generate import _chat
 
-            prompts = [
-                _rewrite_prompt(*turns[index]) for index in pending
-            ]
-            rewrites = _chat(
-                self.engine, self.sampling, LISTENER_SYSTEM_PROMPT, prompts
-            )
-            for index, rewrite in zip(pending, rewrites):
-                text, market, state = turns[index]
-                score, correction, order_text = parse_review(rewrite)
-                actions, match = parse_orders(order_text, market, state)
-                if actions:
-                    direct, direct_match = parse_orders(text, market, state)
-                    if direct != actions:
-                        match = 'fuzzy'
-                results[index] = {'actions': actions,
-                                  'reason_given': reasons[index],
-                                  'match': match, 'acted': bool(actions),
-                                  'rewrite': rewrite,
-                                  'language_score': score,
-                                  'correction': correction}
-        return results
+        prompts = [_review_prompt(*turn) for turn in turns]
+        replies = _chat(
+            self.engine, self.sampling, REVIEW_SYSTEM_PROMPT, prompts
+        )
+        reviews = []
+        for reply in replies:
+            score, correction = parse_review(reply)
+            reviews.append({'score': score, 'correction': correction,
+                            'rewrite': reply})
+        return reviews

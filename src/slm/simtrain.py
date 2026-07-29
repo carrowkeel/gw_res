@@ -12,15 +12,23 @@ toward the decisions that scored well. There are no gold actions anywhere.
 A replay fraction of stage-1 packed text keeps language anchored at the
 gradient level.
 
+Orders always come from pattern-parsing the trader's raw text, exactly
+as the entry gate measures: a run that fed the review LLM's charitable
+rewrites into the trade path learned to spam vague repeated stubs the
+reviewer would ground into real trades, optimizing the listener instead
+of the market. The review LLM only scores language and offers minimal
+corrections.
+
 Language reinforcement guards against the register eroding under
 score-weighted self-imitation, with prevention ahead of cure. Prevention:
-a turn is eligible for imitation weight only if it executed, gave a
-reason, and cleared the imitation score floor when scored - lucky garbage
-acts in the world but is never imitated. Cure: in llm listener mode the
-listener scores each turn's grammar and coherence and returns a minimal
-correction - repetition and pathologies repaired, the trader's own words
-kept - and corrections of low-scoring turns enter a rolling buffer only
-when they themselves carry a reason and state a valid move, so a
+a turn is eligible for imitation weight only if it executed exactly one
+stated order, gave a reason, is not repetitive by the program's own
+four-word-run test, and cleared the imitation score floor when scored -
+lucky garbage acts in the world but is never imitated, and a repetitive
+turn's language score is forced to zero so collapse drags the windowed
+score down whether or not the reviewer notices. Cure: corrections of
+low-scoring turns enter a rolling buffer only when they themselves carry
+a reason, are free of repetition, and state a valid move, so a
 degenerate policy cannot refill the buffer with its own collapse. The
 buffer is sampled uniformly at random: selection by move score would
 couple language training to earnings luck, and the outcome pathway
@@ -181,16 +189,19 @@ def _admissible_correction(correction, decision, turn_market, turn_state):
     """Whether a correction may enter the buffer: the interface form only.
 
     It must keep to the turn's numbers (drop, never invent), carry a
-    reason, and state a valid move - a parseable order or a stated hold.
-    Without this floor the buffer tracks a degenerate policy downward:
-    a repetitive but grammatical turn survives minimal correction intact
-    and returns as an imitation target of its own collapse.
+    reason, be free of repetition, and state a valid move - a parseable
+    order or a stated hold. Without this floor the buffer tracks a
+    degenerate policy downward: a repetitive but grammatical turn
+    survives minimal correction intact and returns as an imitation
+    target of its own collapse.
     """
     corrected = set(re.findall(r'\d+', correction))
     original = set(re.findall(r'\d+', decision))
     if not corrected <= original:
         return False
     if not listener_module.reason_given(correction):
+        return False
+    if listener_module.repetitive(correction):
         return False
     actions, _ = listener_module.parse_orders(
         correction, turn_market, turn_state
@@ -261,6 +272,7 @@ def _play_batch(model, tokenizer, config, llm_listener, step, block_size,
                 protocol_line=simtrain_config.protocol_line,
                 exemplar_turn=simtrain_config.exemplar_turn,
             )
+            game['block'] = block
             prefix = ('\n' if quarter else '') + block
             game['token_ids'].extend(tokenizer.encode(prefix))
         phase_started = time.time()
@@ -276,18 +288,19 @@ def _play_batch(model, tokenizer, config, llm_listener, step, block_size,
             game['spans'].append((span_start, len(game['token_ids'])))
             turns.append((decision_text, game['market'], game['state']))
         phase_started = time.time()
-        if llm_listener is not None:
-            results = llm_listener.interpret_batch(
-                turns, no_reason_probability, gate_random,
+        results = [
+            listener_module.interpret(
+                text, turn_market, turn_state,
+                no_reason_probability, gate_random,
             )
-        else:
-            results = [
-                listener_module.interpret(
-                    text, turn_market, turn_state,
-                    no_reason_probability, gate_random,
-                )
-                for text, turn_market, turn_state in turns
-            ]
+            for text, turn_market, turn_state in turns
+        ]
+        if llm_listener is not None:
+            reviews = llm_listener.review_batch(turns)
+            for result, review in zip(results, reviews):
+                result['language_score'] = review['score']
+                result['correction'] = review['correction']
+                result['rewrite'] = review['rewrite']
         stats['listener_seconds'] += time.time() - phase_started
         if sample_turn is None and turns:
             sample_turn = (turns[0][0], results[0])
@@ -299,7 +312,11 @@ def _play_batch(model, tokenizer, config, llm_listener, step, block_size,
             if result['acted']:
                 stats['acted'] += 1
             stats['match_%s' % result['match']] += 1
+            stub = listener_module.repetitive(turn[0])
             score = result['language_score']
+            if score is not None and stub:
+                score = 0
+                result['language_score'] = 0
             correction = result['correction']
             if score is not None:
                 stats['language_scores'].append(score)
@@ -335,6 +352,8 @@ def _play_batch(model, tokenizer, config, llm_listener, step, block_size,
             game['acted'].append(bool(executed))
             eligible = (
                 bool(executed) and result['reason_given']
+                and len(result['actions']) == 1
+                and not stub
                 and (score is None
                      or simtrain_config.imitation_score_floor <= 0
                      or score >= simtrain_config.imitation_score_floor)
@@ -347,6 +366,7 @@ def _play_batch(model, tokenizer, config, llm_listener, step, block_size,
                 stats['no_advisor_earnings'].append(earnings)
             game['turn_records'].append({
                 'quarter': quarter + 1,
+                'context': game['block'],
                 'decision': turn[0],
                 'rewrite': result['rewrite'],
                 'language_score': result['language_score'],

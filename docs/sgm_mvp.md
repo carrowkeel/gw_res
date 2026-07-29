@@ -276,15 +276,18 @@ Design constraints carried into implementation:
   has layers, and emitted intermediate tokens are the only way past that
   ceiling.
 
-**The forgiving listener.** The LLM interprets SGM output into the nearest
-sensible simulator action, so near-miss outputs still act on the world and
-outcome signal is nonzero from the first games — the interface is a slope,
-not a cliff (the same move as scoring eval answers found anywhere in the
-output rather than requiring format). Leaning on the interpreter is handled
-by simple means: scoring outputs, making the listener stricter over time,
-and eventual removal of the layer. Correction distance (how far the
-listener reached from what the model wrote to a valid action) is logged as
-the progress metric toward canonical output.
+**The listener.** The plan was always a slope that tightens into a
+cliff: charitable LLM interpretation while the model could not produce
+parseable turns, strictness dialed up over training, eventual removal.
+The dial turned all the way the moment a bridge model passed the entry
+gate on raw text — and the run that kept charity in the loop showed why:
+the policy learned to spam vague repeated stubs the interpreter would
+charitably ground into real trades, optimizing the listener instead of
+the market. Orders now come only from pattern-parsing the trader's raw
+text, in training exactly as at the gate. The LLM keeps one job:
+reviewing language (a score and a minimal correction), with no path from
+its output to a trade. Match rates (exact, fuzzy, none) on the raw text
+remain the progress metric toward canonical output.
 
 **Training mechanics.** Game-batched: one training sequence is one game
 (N sequential simulator steps in order, so the context carries the evolving
@@ -298,28 +301,33 @@ the listener's language-quality score covers it behaviorally.
 **Language reinforcement.** The behavioral cover is a loop of its own,
 because score-weighted self-imitation can amplify degraded language that
 happened to earn. Prevention comes first: a turn is eligible for
-imitation weight only if it executed, gave a reason, and cleared the
-imitation score floor when scored, so lucky garbage acts in the world but
-is never imitated. The cure is the correction channel: in llm listener
-mode the listener grades each turn's grammar and coherence (1-5, never
-the quality of the trade) and returns a minimal correction — repetition
-and pathologies repaired, the trader's own words, names, and numbers
-kept — so the imitation target stays the model's voice rather than the
-listener's. A correction enters the rolling buffer only if it keeps to
-the turn's numbers, carries a reason, and states a valid move: the first
-sim run with this loop collapsed to a repeated grammatical stub because
-minimal correction preserves grammatical degeneracy, and an unfloored
-buffer tracked the collapse downward as uniform self-imitation — the
-first-pilot failure returning through the back door. The buffer is
-sampled uniformly at random (selection by move score would couple
-language training to earnings luck), the trigger is relative — the first
-full window of scores sets a baseline and correction batches mix in when
-the windowed mean drops below it — and a rehearsal fraction of bridge
-records anchors the register at the gradient level the way stage-1
-replay anchors base prose. Whether this loop earns its keep is measured,
-not assumed: per-step history logs the language score against its
-baseline, the distinct-decision rate (the collapse gauge that needs no
-listener), the eligible rate, and corrections offered against admitted.
+imitation weight only if it executed exactly one stated order, gave a
+reason, is not repetitive by the program's own four-word-run test, and
+cleared the imitation score floor when scored — lucky garbage acts in
+the world but is never imitated. The repetition test also forces a
+repetitive turn's language score to zero, because two runs showed the
+review LLM grading degenerate stubs a 2 on its compressed scale — clause
+grammar is fine, so collapse never trips a score-based trigger unless
+the program overrides it. The cure is the correction channel: the
+reviewer grades each turn (1-5, never the quality of the trade) and
+returns a minimal correction — the trader's own words, names, and
+numbers kept — and a correction enters the rolling buffer only if it
+keeps to the turn's numbers, carries a reason, is free of repetition,
+and states a valid move. Both floors exist because each collapse so far
+found the softest surface: minimal correction preserves grammatical
+degeneracy, an unfloored buffer tracks the collapsing policy as uniform
+self-imitation, and every pattern-checkable guard becomes a shape the
+policy wears while hollowing the content — the reason clause survived
+the second collapse as taxidermy. The buffer is sampled uniformly at
+random (selection by move score would couple language training to
+earnings luck), the trigger is relative — the first full window of
+scores sets a baseline and correction batches mix in when the windowed
+mean drops below it — and a rehearsal fraction of bridge records anchors
+the register at the gradient level the way stage-1 replay anchors base
+prose. Whether this loop earns its keep is measured, not assumed:
+per-step history logs the language score against its baseline, the
+distinct-decision rate (the collapse gauge that needs no listener), the
+eligible rate, and corrections offered against admitted.
 
 **Outcome noise.** The chance to earn without deciding well is kept low
 so slightly-correct is distinguishable from random. Two levers: the

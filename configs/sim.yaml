@@ -11,10 +11,10 @@ simtrain:
   companies_per_field: 2
   maximum_steps: 150
   no_reason_action_probability: 0.5
-  protocol_line: true
+  protocol_line: false
   entry_threshold: 0.25
   entry_probe_games: 16
-  exemplar_turn: true
+  exemplar_turn: false
   no_signal_abort_steps: 25
   curriculum:
     - from_step: 0
@@ -26,8 +26,8 @@ simtrain:
     - from_step: 120
       field_count: 3
       companies_per_field: 2
-  learning_rate: 0.0001
-  minimum_learning_rate: 0.00001
+  learning_rate: 0.00003
+  minimum_learning_rate: 0.000003
   warmup_steps: 50
   weight_decay: 0.1
   gradient_clip: 1.0
@@ -68,7 +68,7 @@ generate:
   gpu_memory_utilization: 0.35
   max_model_len: 2048
   dtype: bfloat16
-  max_tokens: 48
+  max_tokens: 96
   temperature: 0.2
   top_p: 0.9
 
