@@ -75,12 +75,14 @@ def probe(model, tokenizer, config, block_size, device, games_count=None):
     match_counts = {'exact': 0, 'fuzzy': 0, 'none': 0}
     samples = []
     model.eval()
+    decision_format = simtrain_config.decision_format
     for quarter in range(simtrain_config.quarters):
         for game in games:
             block = render.render_quarter(
                 game['state'], game['market'], game['random'],
                 protocol_line=simtrain_config.protocol_line,
                 exemplar_turn=simtrain_config.exemplar_turn,
+                decision_format=decision_format,
             )
             prefix = ('\n' if quarter else '') + block
             game['token_ids'].extend(tokenizer.encode(prefix))
@@ -90,10 +92,13 @@ def probe(model, tokenizer, config, block_size, device, games_count=None):
         for game, decision_text in zip(games, decisions):
             decision_ids = tokenizer.encode(' ' + decision_text)
             game['token_ids'].extend(decision_ids)
-            actions, match = listener_module.parse_orders(
-                decision_text, game['market'], game['state']
+            actions, match = listener_module.parse_decision(
+                decision_text, game['market'], game['state'],
+                decision_format,
             )
-            has_reason = listener_module.reason_given(decision_text)
+            has_reason = bool(
+                listener_module.reason_text(decision_text, decision_format)
+            )
             held = (
                 not actions
                 and listener_module.hold_stated(decision_text)
@@ -127,6 +132,7 @@ def probe(model, tokenizer, config, block_size, device, games_count=None):
     )
     return {
         'games': games_count,
+        'decision_format': decision_format,
         'field_count': field_count,
         'companies_per_field': companies_per_field,
         'mean_return': round(mean_return, 2),

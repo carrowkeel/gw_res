@@ -249,6 +249,13 @@ class SimTrainConfig:
     max_decision_tokens: int = 48
     listener_mode: str = 'pattern'
     listener_model: str = None
+    decision_format: str = 'freeform'
+    loss_scope: str = 'turn'
+    reason_grounding: bool = False
+    duplicate_form_cap: float = 0.0
+    anchor_weight: float = 0.0
+    freeze_layers: int = 0
+    freeze_embeddings: bool = False
     no_reason_action_probability: float = 0.5
     no_reason_anneal_steps: int = 0
     language_score_drop: float = 0.3

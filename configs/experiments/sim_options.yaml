@@ -1,0 +1,53 @@
+base_config: configs/sim.yaml
+sweep_name: sim-options
+stages: [simtrain]
+
+common:
+  simtrain:
+    listener_mode: pattern
+
+variants:
+  - name: baseline
+    overrides: {}
+  - name: order-clause
+    overrides:
+      simtrain:
+        loss_scope: order_clause
+  - name: grounding
+    overrides:
+      simtrain:
+        reason_grounding: true
+  - name: form-cap
+    overrides:
+      simtrain:
+        duplicate_form_cap: 0.1
+  - name: anchor
+    overrides:
+      simtrain:
+        anchor_weight: 0.5
+  - name: freeze-half
+    overrides:
+      simtrain:
+        freeze_layers: 5
+        freeze_embeddings: true
+  - name: rehearsal-heavy
+    overrides:
+      simtrain:
+        rehearsal_fraction: 0.3
+  - name: low-lr
+    overrides:
+      simtrain:
+        learning_rate: 0.00001
+        minimum_learning_rate: 0.000001
+  - name: structured
+    overrides:
+      simtrain:
+        decision_format: structured
+        protocol_line: true
+        exemplar_turn: true
+  - name: guarded
+    overrides:
+      simtrain:
+        loss_scope: order_clause
+        reason_grounding: true
+        duplicate_form_cap: 0.1

@@ -100,8 +100,16 @@ PROTOCOL_MESSAGE = (
     'you want no trade.' % STATE_SPEAKER
 )
 
+STRUCTURED_PROTOCOL_MESSAGE = (
+    '%s: State your move each quarter on one line in the form: move: buy '
+    'or sell, the number of shares, and the company name, then a bar, '
+    'then reason: and your reason. Say move: hold | reason: and your '
+    'reason to make no trade.' % STATE_SPEAKER
+)
 
-def render_exemplar_exchange(market, random_generator):
+
+def render_exemplar_exchange(market, random_generator,
+                             decision_format='freeform'):
     """Scripted example exchange shown once before the first quarter.
 
     A base model imitates transcript patterns far more readily than it
@@ -112,35 +120,45 @@ def render_exemplar_exchange(market, random_generator):
     only: trader spans never cover it, so it is never trained on.
     """
     company = random_generator.choice(market['companies'])
+    if decision_format == 'structured':
+        turn = '%s: move: buy 2 %s | reason: %s is expected to be strong.' % (
+            MODEL_SPEAKER, company['name'], company['demand_factor'],
+        )
+    else:
+        turn = '%s: buy 2 shares of %s because %s is expected to be strong.' % (
+            MODEL_SPEAKER, company['name'], company['demand_factor'],
+        )
     return '\n'.join([
         '%s: Before the first quarter, one example exchange in the '
         'required form.' % STATE_SPEAKER,
-        '%s: buy 2 shares of %s because %s is expected to be strong.' % (
-            MODEL_SPEAKER, company['name'], company['demand_factor'],
-        ),
+        turn,
         '%s: That is the form. The example is over; nothing was '
         'traded.' % STATE_SPEAKER,
     ])
 
 
 def render_quarter(state, market, random_generator, protocol_line=True,
-                   exemplar_turn=False):
+                   exemplar_turn=False, decision_format='freeform'):
     """Render one quarter's context block, ending at the model's cue.
 
     Returns the block text whose last line is the trader label and colon,
     with no trailing newline, so the model's generation continues the line.
     The first quarter can carry a broker protocol message stating the
     order format and a scripted exemplar exchange demonstrating it:
-    in-context material for a cold-start model, never training data.
+    in-context material for a cold-start model, never training data. Both
+    follow the configured decision format.
     """
     from .market import state_summary
 
     lines = []
     if exemplar_turn and state['quarter'] == 1:
-        lines.append(render_exemplar_exchange(market, random_generator))
+        lines.append(render_exemplar_exchange(market, random_generator,
+                                              decision_format))
     lines.append(render_state_message(state_summary(state), random_generator))
     if protocol_line and state['quarter'] == 1:
-        lines.append(PROTOCOL_MESSAGE)
+        lines.append(STRUCTURED_PROTOCOL_MESSAGE
+                     if decision_format == 'structured'
+                     else PROTOCOL_MESSAGE)
     for report in state['reports']:
         lines.append(render_report_message(report, market, random_generator))
     lines.append('%s:' % MODEL_SPEAKER)

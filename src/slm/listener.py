@@ -14,6 +14,13 @@ metric toward canonical output.
 The review LLM has one remaining job: grade each turn's grammar and
 coherence and return a minimal correction. It never touches the order
 path.
+
+Two decision formats are supported. The freeform format reads orders out
+of natural sentences with the permissive pattern below. The structured
+format expects one strict template line, 'move: buy 3 Krouket Umbrellas
+| reason: rain will be strong', and parses nothing else: it is the
+parseable-template end state where the simulator needs no language
+understanding at all, only the template.
 """
 
 import re
@@ -22,6 +29,17 @@ REASON_MARKERS = ['because', 'since ', 'as the', 'as it', 'given that']
 
 _ORDER_PATTERN = re.compile(
     r'\b(buy|sell)(?:ing)?\b\s+(?:(\d+|all)\s+)?(?:shares?\s+(?:of\s+)?)?',
+    re.IGNORECASE,
+)
+
+_STRUCTURED_ORDER_PATTERN = re.compile(
+    r'move:\s*(buy|sell)\s+(\d+|all)\s+(?:shares?\s+(?:of\s+)?)?'
+    r'([^|]+?)\s*\|\s*reason:\s*(\S.*)',
+    re.IGNORECASE,
+)
+
+_STRUCTURED_HOLD_PATTERN = re.compile(
+    r'move:\s*hold\s*\|\s*reason:\s*(\S.*)',
     re.IGNORECASE,
 )
 
@@ -46,6 +64,60 @@ REVIEW_SYSTEM_PROMPT = (
 def reason_given(text):
     lowered = text.lower()
     return any(marker in lowered for marker in REASON_MARKERS)
+
+
+def reason_offset(text, decision_format='freeform'):
+    """Character index where the turn's reason part starts, None if absent.
+
+    Freeform turns start their reason at the earliest reason marker;
+    structured turns start it at the bar separating the move field from
+    the reason field. This is the boundary the order-clause loss scope
+    cuts at, so everything from the offset onward is reason, not order.
+    """
+    if decision_format == 'structured':
+        position = text.find('|')
+        return position if position >= 0 else None
+    lowered = text.lower()
+    positions = [lowered.find(marker) for marker in REASON_MARKERS]
+    positions = [position for position in positions if position >= 0]
+    return min(positions) if positions else None
+
+
+def reason_text(text, decision_format='freeform'):
+    """The turn's reason part, empty when it gives none.
+
+    For freeform turns this is the tail from the earliest reason marker,
+    marker included; for structured turns it is the reason field of the
+    template. Both formats agree that a turn has a reason exactly when
+    this is non-empty.
+    """
+    if decision_format == 'structured':
+        found = (_STRUCTURED_ORDER_PATTERN.search(text)
+                 or _STRUCTURED_HOLD_PATTERN.search(text))
+        return found.group(found.lastindex).strip() if found else ''
+    offset = reason_offset(text)
+    return text[offset:].strip() if offset is not None else ''
+
+
+def grounded_reason(reason, market):
+    """Whether a reason cites the market's causal vocabulary.
+
+    Grounding asks for a term the news reports speak in - a demand
+    factor or a material - rather than a company or product name: a
+    reason that only names what it trades is self-reference, not
+    evidence the reports were read, and the template-collapse run
+    produced exactly that. Products are excluded because company names
+    contain them, so they would let self-reference through. A grounded
+    reason is not necessarily correct; it merely cites something a
+    report could have said.
+    """
+    lowered = reason.lower()
+    if not lowered:
+        return False
+    terms = list(market['demand_factors'])
+    for company in market['companies']:
+        terms.append(company['material'])
+    return any(term.lower() in lowered for term in terms)
 
 
 def hold_stated(text):
@@ -116,6 +188,21 @@ def _match_company(fragment, companies):
     return None, 'none'
 
 
+def _clamp_quantity(verb, company, quantity_word, state):
+    """Resolve a quantity word into a feasible share count, possibly zero."""
+    if quantity_word is None:
+        quantity = 1
+    elif quantity_word.lower() == 'all':
+        quantity = max(1, state['holdings'].get(company, 0))
+    else:
+        quantity = int(quantity_word)
+    if verb == 'buy':
+        price = state['prices'][company]
+        affordable = int(state['cash'] // price)
+        return min(quantity, max(affordable, 0))
+    return min(quantity, state['holdings'].get(company, 0))
+
+
 def parse_orders(text, market, state):
     """Extract orders from free text; the shared core of both modes.
 
@@ -138,23 +225,44 @@ def parse_orders(text, market, state):
             continue
         if worst is None or ranking[match] > ranking[worst]:
             worst = match
-        if quantity_word is None:
-            quantity = 1
-        elif quantity_word.lower() == 'all':
-            quantity = max(1, state['holdings'].get(company, 0))
-        else:
-            quantity = int(quantity_word)
-        if verb == 'buy':
-            price = state['prices'][company]
-            affordable = int(state['cash'] // price)
-            quantity = min(quantity, max(affordable, 0))
-        else:
-            quantity = min(quantity, state['holdings'].get(company, 0))
+        quantity = _clamp_quantity(verb, company, quantity_word, state)
         if quantity > 0:
             actions.append(
                 {'action': verb, 'company': company, 'quantity': quantity}
             )
     return actions, worst or 'none'
+
+
+def parse_structured(text, market, state):
+    """Strict template parse: the first 'move: ... | reason: ...' line only.
+
+    A turn that does not carry the template parses as nothing at all -
+    the strictness is the point of the format, so there is no fallback to
+    the freeform pattern and at most one order comes out. The match label
+    stays truthful the same way parse_orders keeps it: a template naming
+    a real company keeps its match even when the feasibility clamp
+    empties the order.
+    """
+    found = _STRUCTURED_ORDER_PATTERN.search(text)
+    if found is None:
+        return [], 'none'
+    verb = found.group(1).lower()
+    company, match = _match_company(found.group(3), market['companies'])
+    if company is None:
+        return [], 'none'
+    quantity = _clamp_quantity(verb, company, found.group(2), state)
+    if quantity <= 0:
+        return [], match
+    return (
+        [{'action': verb, 'company': company, 'quantity': quantity}], match
+    )
+
+
+def parse_decision(text, market, state, decision_format='freeform'):
+    """Parse one trader turn under the configured decision format."""
+    if decision_format == 'structured':
+        return parse_structured(text, market, state)
+    return parse_orders(text, market, state)
 
 
 def _gate_passes(has_reason, no_reason_probability, random_generator):
@@ -166,7 +274,7 @@ def _gate_passes(has_reason, no_reason_probability, random_generator):
 
 
 def interpret(text, market, state, no_reason_probability=0.0,
-              random_generator=None):
+              random_generator=None, decision_format='freeform'):
     """Pattern-mode interpretation of one trader turn.
 
     The reason gate is soft: a turn with a reason always proceeds to
@@ -175,12 +283,12 @@ def interpret(text, market, state, no_reason_probability=0.0,
     precondition. Annealing the probability toward zero recovers the
     strict gate as the end state.
     """
-    has_reason = reason_given(text)
+    has_reason = bool(reason_text(text, decision_format))
     if not _gate_passes(has_reason, no_reason_probability, random_generator):
         return {'actions': [], 'reason_given': has_reason, 'match': 'none',
                 'acted': False, 'rewrite': None, 'language_score': None,
                 'correction': None}
-    actions, match = parse_orders(text, market, state)
+    actions, match = parse_decision(text, market, state, decision_format)
     return {'actions': actions, 'reason_given': has_reason, 'match': match,
             'acted': bool(actions), 'rewrite': None, 'language_score': None,
             'correction': None}
