@@ -223,6 +223,7 @@ class TemplateSftConfig:
     maximum_quantity: int = 12
     report_coverage: float = 0.7
     advisor_coverage: float = 1.0
+    input_variety: bool = False
     holdout_fraction: float = 0.02
     eval_games: int = 24
     eval_template_threshold: float = 0.9
@@ -307,6 +308,7 @@ class SimTrainConfig:
     advisor_coverage: float = 1.0
     report_coverage_final: float = None
     advisor_coverage_final: float = None
+    input_variety: bool = False
     protocol_line: bool = True
     entry_threshold: float = 0.25
     entry_probe_games: int = 16

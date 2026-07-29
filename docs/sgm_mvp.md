@@ -349,7 +349,15 @@ game (report_coverage_final / advisor_coverage_final interpolate
 linearly across quarters: early quarters informative, late quarters
 thin). The blind and oracle references are replayed under whichever
 difficulty is in force, ramps included, so the gap to oracle keeps
-meaning headroom.
+meaning headroom. A third dial, input_variety, hardens the language
+side: report level words draw from small synonym families ('strong'
+sometimes reads 'high' or 'booming') so a level is carried by a word
+family rather than one token, and single tokens cannot become condition
+codes the policy keys on without reading. The listener owns the
+vocabulary, the renderer speaks it, and the truthful-reason check
+accepts any synonym of the claimed level - truthful_reason_rate is
+logged every step, so reason-lying under outcome pressure is a curve
+per variant rather than a transcript anecdote.
 
 The weighting withholds imitation rather than merely modulating it, the
 lesson of the first pilots (weights centered at one imitated every turn

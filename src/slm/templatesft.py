@@ -179,7 +179,10 @@ def generate_records(config, tokenizer):
         )
         lines = []
         for _ in range(stage_config.quarters):
-            block = render.render_structured_quarter(state, game_market)
+            block = render.render_structured_quarter(
+                state, game_market, game_random,
+                stage_config.input_variety,
+            )
             lines.extend(block.split('\n'))
             decision_line, action = _teacher_turn(
                 game_market, state, random_generator, stage_config
@@ -218,34 +221,6 @@ def generate_records(config, tokenizer):
         action_counts['buy'], action_counts['sell'], action_counts['hold'],
     )
     return records
-
-
-def _truthful_reason(reason, game_market, leaked):
-    """Whether a reason's claim matches the actually leaked shock.
-
-    The taught reasons make one falsifiable claim in report vocabulary
-    ('rain will be strong', 'the plastic price will fall'), so the claim
-    can be checked against the leaked shocks: the cited factor must have
-    leaked and the direction word must match its level. A reason citing
-    nothing checkable, or citing a factor that never leaked, is not
-    truthful - taxidermy reasons fail here even when they ground.
-    """
-    lowered = reason.lower()
-    for factor in game_market['demand_factors']:
-        if factor in lowered:
-            if 'strong' in lowered:
-                return leaked.get(factor) == 1
-            if 'weak' in lowered:
-                return leaked.get(factor) == -1
-            return False
-    for cost_factor in game_market['cost_factors']:
-        if cost_factor.split()[0] in lowered:
-            if 'rise' in lowered:
-                return leaked.get(cost_factor) == 1
-            if 'fall' in lowered:
-                return leaked.get(cost_factor) == -1
-            return False
-    return False
 
 
 EVAL_SEED_OFFSET = 900001
@@ -318,7 +293,8 @@ def evaluate(config, checkpoint_path=None):
     for quarter in range(simtrain_config.quarters):
         for game in games:
             block = render.render_structured_quarter(
-                game['state'], game['market']
+                game['state'], game['market'], game['random'],
+                simtrain_config.input_variety,
             )
             prefix = ('\n' if quarter else '') + block
             game['token_ids'].extend(tokenizer.encode(prefix))
@@ -334,7 +310,7 @@ def evaluate(config, checkpoint_path=None):
             hold = not parsed and listener.hold_stated(decision)
             reason = listener.reason_text(decision, 'structured')
             grounded = listener.grounded_reason(reason, game['market'])
-            truthful = _truthful_reason(
+            truthful = listener.truthful_reason(
                 reason, game['market'], game['state']['leaked_shocks']
             )
             teacher_line, teacher_action = _teacher_turn(

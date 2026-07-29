@@ -140,38 +140,59 @@ def render_structured_state(summary):
     )
 
 
-def render_structured_report(report, market):
+def render_structured_report(report, market, random_generator=None,
+                             input_variety=False):
+    """One structured report line, optionally with level-word synonyms.
+
+    The canonical words are the first entry of each level's synonym set
+    in the listener (the vocabulary owner). With input_variety a random
+    synonym is drawn instead, so 'strong' sometimes reads 'high' or
+    'booming': the level is carried by a small word family rather than
+    one token, which keeps single tokens from becoming condition codes
+    the policy can key on without reading.
+    """
+    from .listener import COST_LEVEL_WORDS, DEMAND_LEVEL_WORDS
+
     if report['kind'] == 'factor':
         if report['factor'] in market['demand_factors']:
-            word = _DEMAND_WORDS[report['level']]
+            words = DEMAND_LEVEL_WORDS[report['level']]
         else:
-            word = _COST_WORDS[report['level']]
+            words = COST_LEVEL_WORDS[report['level']]
+        if input_variety and random_generator is not None:
+            word = random_generator.choice(words)
+        else:
+            word = words[0]
         return 'news: %s %s next quarter' % (report['factor'], word)
     return 'advisor: %s %s' % (report['stance'], report['company'])
 
 
-def render_structured_quarter(state, market):
+def render_structured_quarter(state, market, random_generator=None,
+                              input_variety=False):
     """The structured register: one field-labeled line per message.
 
     Lowercase labels, bar-separated state fields, no prose - deliberately
     disjoint from the dialogue register so the simulation lives in its
     own register and interferes with ordinary language as little as
     possible. The register is taught by the template SFT stage, not
-    instructed in context, so there is no protocol line and no exemplar;
-    rendering is deterministic because template variety would only blur
-    the register boundary.
+    instructed in context, so there is no protocol line and no exemplar.
+    Rendering is deterministic by default; input_variety draws level-word
+    synonyms per report line, the one controlled source of surface
+    variety.
     """
     from .market import state_summary
 
     lines = [render_structured_state(state_summary(state))]
     for report in state['reports']:
-        lines.append(render_structured_report(report, market))
+        lines.append(render_structured_report(report, market,
+                                              random_generator,
+                                              input_variety))
     lines.append(STRUCTURED_TRADER_CUE)
     return '\n'.join(lines)
 
 
 def render_quarter(state, market, random_generator, protocol_line=True,
-                   exemplar_turn=False, decision_format='freeform'):
+                   exemplar_turn=False, decision_format='freeform',
+                   input_variety=False):
     """Render one quarter's context block, ending at the model's cue.
 
     Returns the block text whose last line is the trader cue, with no
@@ -185,7 +206,8 @@ def render_quarter(state, market, random_generator, protocol_line=True,
     from .market import state_summary
 
     if decision_format == 'structured':
-        return render_structured_quarter(state, market)
+        return render_structured_quarter(state, market, random_generator,
+                                         input_variety)
     lines = []
     if exemplar_turn and state['quarter'] == 1:
         lines.append(render_exemplar_exchange(market, random_generator))
