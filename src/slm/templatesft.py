@@ -15,8 +15,12 @@ are grounded by construction and pass the sim's reason_grounding floor.
 The teacher does inject a policy - follow the strongest leaked signal -
 which is intentional: the stage teaches the register and the habit of
 reading reports; the simulator's outcome loss then owns refining the
-policy. Stage-1 replay and a rehearsal fraction of bridge records
-protect the earlier registers while this one is added.
+policy. Stage-1 replay protects general language while the register is
+added; prose is register-distant, so it cannot compete with the
+template. Bridge rehearsal is off by default and exists only as an
+option: the bridge's freeform decision turns are the one register the
+template is meant to supersede, and rehearsing them trains the closest
+competing behavior in decision-shaped contexts.
 
 The stage trains from the run tree's furthest bridging checkpoint and
 writes checkpoints/templatesft, which resolve_base_checkpoint prefers,
@@ -169,7 +173,10 @@ def generate_records(config, tokenizer):
         game_market = market.sample_market(
             game_random, field_count, stage_config.companies_per_field
         )
-        state = market.start_game(game_market, game_random)
+        state = market.start_game(
+            game_market, game_random, stage_config.report_coverage,
+            stage_config.advisor_coverage,
+        )
         lines = []
         for _ in range(stage_config.quarters):
             block = render.render_structured_quarter(state, game_market)
@@ -202,6 +209,8 @@ def generate_records(config, tokenizer):
             market.step_game(
                 game_market, state,
                 [action] if action is not None else [], game_random,
+                market.NOISE_SIGMA, stage_config.report_coverage,
+                stage_config.advisor_coverage,
             )
     logger.info(
         'generated %d records from %d games (buy %d, sell %d, hold %d)',
@@ -262,7 +271,8 @@ def evaluate(config, checkpoint_path=None):
     import torch
 
     from .simtrain import (
-        _difficulty_at, _generate_decisions, _reference_returns,
+        _difficulty_at, _generate_decisions, _quarter_coverage,
+        _reference_returns,
     )
 
     stage_config = config.templatesft
@@ -280,7 +290,8 @@ def evaluate(config, checkpoint_path=None):
     )
     model.eval()
 
-    field_count, companies_per_field = _difficulty_at(simtrain_config, 0)
+    difficulty = _difficulty_at(simtrain_config, 0)
+    opening_coverage = _quarter_coverage(simtrain_config, difficulty, 0)
     teacher_random = random.Random(config.project.seed + 41)
     games = []
     for game_index in range(stage_config.eval_games):
@@ -288,12 +299,14 @@ def evaluate(config, checkpoint_path=None):
             config.project.seed + EVAL_SEED_OFFSET + game_index
         )
         game_market = market.sample_market(
-            game_random, field_count, companies_per_field
+            game_random, difficulty['field_count'],
+            difficulty['companies_per_field'],
         )
         games.append({
             'random': game_random,
             'market': game_market,
-            'state': market.start_game(game_market, game_random),
+            'state': market.start_game(game_market, game_random,
+                                       *opening_coverage),
             'token_ids': [tokenizer.bos_id],
             'earnings': 0.0,
         })
@@ -353,14 +366,18 @@ def evaluate(config, checkpoint_path=None):
                     'match': match,
                     'truthful_reason': truthful,
                 })
+            next_coverage = _quarter_coverage(
+                simtrain_config, difficulty,
+                min(quarter + 1, simtrain_config.quarters - 1),
+            )
             earnings, _ = market.step_game(
                 game['market'], game['state'], parsed, game['random'],
-                simtrain_config.market_noise_sigma,
+                difficulty['market_noise_sigma'], *next_coverage,
             )
             game['earnings'] += earnings
     blind_reference, oracle_reference = _reference_returns(
         simtrain_config, config.project.seed + EVAL_SEED_OFFSET,
-        field_count, companies_per_field,
+        difficulty,
     )
     turns = counts['turns']
 
@@ -370,8 +387,10 @@ def evaluate(config, checkpoint_path=None):
     report = {
         'checkpoint': str(checkpoint_path),
         'games': stage_config.eval_games,
-        'field_count': field_count,
-        'companies_per_field': companies_per_field,
+        'field_count': difficulty['field_count'],
+        'companies_per_field': difficulty['companies_per_field'],
+        'report_coverage': difficulty['report_coverage'],
+        'advisor_coverage': difficulty['advisor_coverage'],
         'turns': turns,
         'template_rate': rate('template'),
         'actionable_rate': rate('actionable'),

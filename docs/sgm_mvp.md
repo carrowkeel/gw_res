@@ -338,6 +338,19 @@ construction), scoring each turn against the mean of its siblings'
 matching quarter — shared world luck cancels, and the advantage measures
 the decision alone.
 
+**Difficulty.** Beyond world size, two information dials make the game
+harder: report_coverage (the per-factor leak probability — less news
+means real hold decisions) and advisor_coverage (the probability the
+advisor speaks at all — the first sweep showed every winning variant
+leaning on advisor-following, so thinning the advisor forces composing
+the factor reports, the skill the market was designed to test). Both
+can rise across the board via the step curriculum, or ramp within each
+game (report_coverage_final / advisor_coverage_final interpolate
+linearly across quarters: early quarters informative, late quarters
+thin). The blind and oracle references are replayed under whichever
+difficulty is in force, ramps included, so the gap to oracle keeps
+meaning headroom.
+
 The weighting withholds imitation rather than merely modulating it, the
 lesson of the first pilots (weights centered at one imitated every turn
 at full strength, and uniform self-imitation of chatter collapsed the
@@ -403,8 +416,15 @@ generates teacher games programmatically (no LLM; the teacher reads the
 leaked reports, reasons cite the report vocabulary, and every taught
 line must round-trip through the structured parser) and trains the
 register by supervised imitation on top of the bridging checkpoint,
-with stage-1 replay and bridge rehearsal protecting the earlier
-registers. The stage grades its own result before any sweep spends GPU
+with stage-1 replay protecting general language. Bridge rehearsal
+inside the stage is off by default: the bridge's freeform decision
+turns are the register the template supersedes, so rehearsing them
+trains the closest competing behavior in decision-shaped contexts -
+the one rehearsal that can unlearn the template rather than protect
+anything worth keeping. During a structured sim run the rehearsal
+channel rehearses the template records themselves (rehearsal_source:
+template), which maintains the register rather than competing with it.
+The stage grades its own result before any sweep spends GPU
 hours on it: a generative eval plays held-out games at the simulator's
 entry difficulty and reports program-checked rates - template form,
 exact company naming, grounded and truthful reasons (the cited factor

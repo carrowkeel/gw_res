@@ -1,0 +1,57 @@
+base_config: configs/sim.yaml
+sweep_name: sim-round2
+stages: [simtrain]
+
+common:
+  simtrain:
+    listener_mode: pattern
+    decision_format: structured
+    base_stage: templatesft
+    rehearsal_source: template
+
+variants:
+  - name: control
+    overrides: {}
+  - name: low-lr
+    overrides:
+      simtrain:
+        learning_rate: 0.00001
+        minimum_learning_rate: 0.000001
+  - name: long
+    overrides:
+      simtrain:
+        maximum_steps: 300
+  - name: hard
+    overrides:
+      simtrain:
+        report_coverage: 0.5
+        advisor_coverage: 0.5
+  - name: no-crutch
+    overrides:
+      simtrain:
+        advisor_coverage: 0.2
+  - name: ramp
+    overrides:
+      simtrain:
+        report_coverage: 0.8
+        report_coverage_final: 0.4
+        advisor_coverage: 1.0
+        advisor_coverage_final: 0.2
+  - name: hard-low-lr
+    overrides:
+      simtrain:
+        report_coverage: 0.5
+        advisor_coverage: 0.5
+        learning_rate: 0.00001
+        minimum_learning_rate: 0.000001
+  - name: order-clause
+    overrides:
+      simtrain:
+        loss_scope: order_clause
+  - name: freeform-order-clause
+    overrides:
+      simtrain:
+        decision_format: freeform
+        base_stage: bridgesft
+        rehearsal_source: bridge
+        loss_scope: order_clause
