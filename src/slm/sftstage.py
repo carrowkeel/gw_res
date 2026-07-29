@@ -21,7 +21,7 @@ from .utils import get_logger, normalize_state_dict
 logger = get_logger('sftstage')
 
 
-STAGE_ORDER = ['bridgesft', 'mathsft', 'commsft', 'pretrain']
+STAGE_ORDER = ['templatesft', 'bridgesft', 'mathsft', 'commsft', 'pretrain']
 
 
 def resolve_checkpoint(directory):
@@ -38,9 +38,10 @@ def resolve_checkpoint(directory):
 def resolve_base_checkpoint(base_directory):
     """Return the furthest-stage checkpoint a run tree has produced.
 
-    The stage chain is pretrain, then communication SFT, then arithmetic
-    SFT; a downstream consumer (the gate, the simulator) builds on the
-    latest stage the base run completed.
+    The stage chain is pretrain, then the bridging SFTs, then the
+    template SFT that teaches the structured sim register; a downstream
+    consumer (the gate, the simulator) builds on the latest stage the
+    base run completed.
     """
     from pathlib import Path
 

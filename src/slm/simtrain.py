@@ -39,6 +39,22 @@ where imitative repair is the only way out of the degrade-into-silence
 spiral. A rehearsal fraction of bridge records anchors the register at
 the gradient level the way stage-1 replay anchors base prose.
 
+The default loop is fully programmatic: template rendering in, pattern
+parsing out, no LLM anywhere. The llm listener mode remains available
+but is an option, not the deployed path. On top of that baseline, the
+language-preservation options are independent switches meant to be
+compared in parallel sweeps: loss_scope order_clause confines the
+outcome weight to the order tokens so earnings luck cannot touch reason
+language; reason_grounding makes eligibility require a reason citing
+the market's causal vocabulary; duplicate_form_cap bounds how much of a
+batch one normalized decision form may claim, the cross-turn guard the
+per-turn repetition test cannot provide; anchor_weight distills toward
+the frozen entry checkpoint on replay batches; freeze_layers and
+freeze_embeddings cut sim updates off from the lower stack entirely
+(with tied embeddings, freezing them also freezes the output head);
+decision_format structured swaps the freeform register for the strict
+parseable template.
+
 The base model, tokenizer, and replay data come from a completed stage-1
 run via simtrain.base_run_dir; without it the model starts from random
 initialization, which is only useful for smoke tests.
@@ -104,19 +120,25 @@ def _load_replay(paths, block_size):
 
 
 def _load_rehearsal(simtrain_config, tokenizer, block_size):
-    """Bridge records as a rehearsal dataset anchoring the register.
+    """SFT records as a rehearsal dataset anchoring a register.
 
-    Stage-1 replay anchors base prose but the reason-bearing register
-    lives only in the bridge pools, so a fraction of bridge records is
-    rehearsed with response-only loss through the same dataset the
-    bridging stage trained on.
+    Stage-1 replay anchors base prose but the taught registers live only
+    in the SFT pools, so a fraction of records is rehearsed with
+    response-only loss through the same dataset the stages trained on.
+    rehearsal_source picks the register: bridge for the freeform
+    reason-bearing turns, template for the structured sim register a
+    templatesft stage taught.
     """
     from .sftstage import PlainPairDataset
 
     if not simtrain_config.base_run_dir:
         return None
+    source_directory = (
+        'templatesft' if simtrain_config.rehearsal_source == 'template'
+        else 'bridgesft'
+    )
     records_path = (Path(simtrain_config.base_run_dir) / 'data'
-                    / 'bridgesft' / 'train.jsonl')
+                    / source_directory / 'train.jsonl')
     if not records_path.exists():
         logger.warning('no bridge records at %s, rehearsal disabled',
                        records_path)
@@ -185,6 +207,49 @@ def _difficulty_at(simtrain_config, step):
     return field_count, companies_per_field
 
 
+def _clause_token_count(tokenizer, decision_ids, offset):
+    """Number of decision tokens covering only the order clause.
+
+    The decision was encoded from the string whose reason part starts at
+    offset, so the clause is the shortest token prefix whose decoded text
+    reaches that offset. Walking prefixes is quadratic but decisions are
+    at most a few dozen tokens and this only runs under the order_clause
+    loss scope.
+    """
+    for count in range(1, len(decision_ids) + 1):
+        if len(tokenizer.decode(decision_ids[:count])) >= offset:
+            return count
+    return len(decision_ids)
+
+
+def _normalized_form(text):
+    """A decision's template form: digits collapsed, case and spacing gone."""
+    collapsed = re.sub(r'\d+', '#', text.lower())
+    return re.sub(r'\s+', ' ', collapsed).strip()
+
+
+def _apply_form_cap(games, stats, cap):
+    """Cross-turn template guard: cap eligibility per normalized form.
+
+    The per-turn repetition test cannot see a batch converging on one
+    sentence whose only variation is the share count, so eligibility is
+    capped per normalized form: once a form has claimed its share of the
+    batch's turns, further occurrences lose imitation weight. The world
+    still resolves them; they just stop being amplified.
+    """
+    total = sum(len(game['eligible']) for game in games)
+    allowed = max(1, int(cap * total))
+    counts = {}
+    for game in games:
+        for quarter, record in enumerate(game['turn_records']):
+            form = _normalized_form(record['decision'])
+            counts[form] = counts.get(form, 0) + 1
+            if counts[form] > allowed and game['eligible'][quarter]:
+                game['eligible'][quarter] = False
+                stats['form_capped'] += 1
+                stats['eligible'] -= 1
+
+
 def _admissible_correction(correction, decision, turn_market, turn_state):
     """Whether a correction may enter the buffer: the interface form only.
 
@@ -247,17 +312,20 @@ def _play_batch(model, tokenizer, config, llm_listener, step, block_size,
             'state': market.start_game(game_market, world_random),
             'token_ids': [tokenizer.bos_id],
             'spans': [],
+            'clause_tokens': [],
             'earnings': [],
             'acted': [],
             'eligible': [],
             'turn_records': [],
         })
     stats = {'turns': 0, 'no_reason': 0, 'acted': 0, 'eligible': 0,
+             'grounded': 0, 'form_capped': 0,
              'match_exact': 0, 'match_fuzzy': 0, 'match_none': 0,
              'advisor_earnings': [], 'no_advisor_earnings': [],
              'language_scores': [], 'decisions': [],
              'corrections_offered': 0, 'corrections_admitted': 0,
              'generate_seconds': 0.0, 'listener_seconds': 0.0}
+    decision_format = simtrain_config.decision_format
     gate_random = random.Random(config.project.seed + step * 100003 + 7)
     no_reason_probability = simtrain_config.no_reason_action_probability
     if simtrain_config.no_reason_anneal_steps > 0:
@@ -271,6 +339,7 @@ def _play_batch(model, tokenizer, config, llm_listener, step, block_size,
                 game['state'], game['market'], game['random'],
                 protocol_line=simtrain_config.protocol_line,
                 exemplar_turn=simtrain_config.exemplar_turn,
+                decision_format=decision_format,
             )
             game['block'] = block
             prefix = ('\n' if quarter else '') + block
@@ -286,12 +355,23 @@ def _play_batch(model, tokenizer, config, llm_listener, step, block_size,
             span_start = len(game['token_ids'])
             game['token_ids'].extend(decision_ids)
             game['spans'].append((span_start, len(game['token_ids'])))
+            clause_count = None
+            if simtrain_config.loss_scope == 'order_clause':
+                offset = listener_module.reason_offset(
+                    ' ' + decision_text, decision_format
+                )
+                if offset is not None:
+                    clause_count = _clause_token_count(
+                        tokenizer, decision_ids, offset
+                    )
+            game['clause_tokens'].append(clause_count)
             turns.append((decision_text, game['market'], game['state']))
         phase_started = time.time()
         results = [
             listener_module.interpret(
                 text, turn_market, turn_state,
                 no_reason_probability, gate_random,
+                decision_format=decision_format,
             )
             for text, turn_market, turn_state in turns
         ]
@@ -344,6 +424,11 @@ def _play_batch(model, tokenizer, config, llm_listener, step, block_size,
                 report['source'] == 'advisor'
                 for report in game['state']['reports']
             )
+            grounded = listener_module.grounded_reason(
+                listener_module.reason_text(turn[0], decision_format),
+                game['market'],
+            )
+            stats['grounded'] += int(grounded)
             earnings, executed = market.step_game(
                 game['market'], game['state'], result['actions'],
                 game['world_random'], simtrain_config.market_noise_sigma,
@@ -354,6 +439,7 @@ def _play_batch(model, tokenizer, config, llm_listener, step, block_size,
                 bool(executed) and result['reason_given']
                 and len(result['actions']) == 1
                 and not stub
+                and (grounded or not simtrain_config.reason_grounding)
                 and (score is None
                      or simtrain_config.imitation_score_floor <= 0
                      or score >= simtrain_config.imitation_score_floor)
@@ -377,6 +463,8 @@ def _play_batch(model, tokenizer, config, llm_listener, step, block_size,
                 'advisor_present': advisor_present,
                 'earnings': round(earnings, 2),
             })
+    if simtrain_config.duplicate_form_cap > 0:
+        _apply_form_cap(games, stats, simtrain_config.duplicate_form_cap)
     return games, stats, sample_turn
 
 
@@ -398,6 +486,11 @@ def _batch_tensors(games, simtrain_config, block_size, device):
     of the same quarter across the games sharing its world, so shared
     world luck cancels and the advantage measures the decision; without
     repeats the baseline is the batch mean over eligible turns.
+
+    Under the order_clause loss scope a turn's weight covers only its
+    order-clause tokens: the reason tokens carry no outcome weight, so
+    reason language is shaped solely by the rehearsal and replay anchors
+    and earnings luck cannot pull it anywhere.
     """
     repeats = max(1, simtrain_config.market_repeats)
     if repeats > 1:
@@ -439,8 +532,9 @@ def _batch_tensors(games, simtrain_config, block_size, device):
         offset = max(0, len(token_ids) - (block_size + 1))
         token_ids = token_ids[offset:]
         weights = [0.0] * (len(token_ids) - 1)
-        for quarter, ((span_start, span_end), eligible) in enumerate(
-                zip(game['spans'], game['eligible'])):
+        for quarter, ((span_start, span_end), eligible, clause) in enumerate(
+                zip(game['spans'], game['eligible'],
+                    game['clause_tokens'])):
             if not eligible:
                 continue
             normalized = advantage_of(game, quarter) / spread
@@ -450,8 +544,11 @@ def _batch_tensors(games, simtrain_config, block_size, device):
             weight = max(0.0, min(weight, simtrain_config.weight_clip) - 1.0)
             if weight <= 0.0:
                 continue
+            span_limit = span_end
+            if clause is not None:
+                span_limit = min(span_end, span_start + clause)
             for position in range(span_start - offset - 1,
-                                  span_end - offset - 1):
+                                  span_limit - offset - 1):
                 if 0 <= position < len(weights):
                     weights[position] = weight
         rows.append((token_ids, weights))
@@ -541,6 +638,25 @@ def run(config):
     logger.info('model: %.2fM parameters, block size %d',
                 model.count_parameters() / 1e6, block_size)
 
+    if simtrain_config.freeze_layers > 0:
+        for block in model.blocks[:simtrain_config.freeze_layers]:
+            block.requires_grad_(False)
+    if simtrain_config.freeze_embeddings:
+        model.token_embedding.requires_grad_(False)
+    if simtrain_config.freeze_layers > 0 or simtrain_config.freeze_embeddings:
+        trainable = sum(
+            parameter.numel() for parameter in model.parameters()
+            if parameter.requires_grad
+        )
+        logger.info(
+            'parameter isolation: %d lower blocks%s frozen, %.2fM of %.2fM '
+            'parameters trainable',
+            simtrain_config.freeze_layers,
+            ' and embeddings (tied head included)'
+            if simtrain_config.freeze_embeddings else '',
+            trainable / 1e6, model.count_parameters() / 1e6,
+        )
+
     checkpoint_directory = ensure_directory(config.simtrain_dir)
     replay = None
     if simtrain_config.replay_fraction > 0:
@@ -550,6 +666,20 @@ def run(config):
     if simtrain_config.rehearsal_fraction > 0:
         rehearsal = _load_rehearsal(simtrain_config, tokenizer, block_size)
     rehearsal_random = random.Random(config.project.seed + 17)
+    anchor_model = None
+    if simtrain_config.anchor_weight > 0:
+        if checkpoint is None or replay is None:
+            logger.warning('anchor distillation needs a stage-1 checkpoint '
+                           'and replay data, disabled')
+        else:
+            anchor_model = GPT(gpt_config).to(device)
+            anchor_model.load_state_dict(
+                normalize_state_dict(checkpoint['model'])
+            )
+            anchor_model.eval()
+            anchor_model.requires_grad_(False)
+            logger.info('anchor distillation toward the entry checkpoint, '
+                        'weight %.2f', simtrain_config.anchor_weight)
     correction_buffer = []
     correction_random = random.Random(config.project.seed + 13)
     language_window = []
@@ -694,6 +824,7 @@ def run(config):
         game_loss = None
         replay_loss = None
         rehearsal_loss = None
+        anchor_loss = None
         correction_loss = None
         loss = None
         weights = None
@@ -720,7 +851,7 @@ def run(config):
                                        * simtrain_config.replay_fraction)),
                             device, replay_random,
                         )
-                        _, replay_loss = model(
+                        replay_logits, replay_loss = model(
                             replay_inputs, replay_targets
                         )
                         loss = (
@@ -728,6 +859,27 @@ def run(config):
                             * game_loss
                             + simtrain_config.replay_fraction * replay_loss
                         )
+                        if anchor_model is not None:
+                            with torch.no_grad():
+                                anchor_logits, _ = anchor_model(
+                                    replay_inputs, replay_targets
+                                )
+                            anchor_probabilities = functional.softmax(
+                                anchor_logits.float(), dim=-1
+                            )
+                            model_log_probabilities = (
+                                functional.log_softmax(
+                                    replay_logits.float(), dim=-1
+                                )
+                            )
+                            anchor_loss = -(
+                                anchor_probabilities
+                                * model_log_probabilities
+                            ).sum(-1).mean()
+                            loss = (
+                                loss + simtrain_config.anchor_weight
+                                * anchor_loss
+                            )
                     if rehearsal is not None:
                         count = max(
                             1, int(simtrain_config.games_per_batch
@@ -832,9 +984,12 @@ def run(config):
             'updated': loss is not None,
             'mean_return': round(mean_return, 2),
             'rolling_return': round(rolling, 2),
+            'blind_reference': round(blind_reference, 2),
+            'oracle_reference': round(oracle_reference, 2),
             'no_reason_rate': round(stats['no_reason'] / stats['turns'], 3),
             'acted_rate': round(stats['acted'] / stats['turns'], 3),
             'eligible_rate': round(stats['eligible'] / stats['turns'], 3),
+            'grounded_rate': round(stats['grounded'] / stats['turns'], 3),
             'distinct_decision_rate': round(
                 len(set(stats['decisions'])) / stats['turns'], 3),
             'match_exact_rate': round(
@@ -863,10 +1018,14 @@ def run(config):
                                   if len(positive_weights) else 0.0)
             row['weight_max'] = (round(positive_weights.max().item(), 3)
                                  if len(positive_weights) else 0.0)
+        if simtrain_config.duplicate_form_cap > 0:
+            row['form_capped'] = stats['form_capped']
         if replay_loss is not None:
             row['replay_loss'] = round(replay_loss.item(), 4)
         if rehearsal_loss is not None:
             row['rehearsal_loss'] = round(rehearsal_loss.item(), 4)
+        if anchor_loss is not None:
+            row['anchor_loss'] = round(anchor_loss.item(), 4)
         if step_language_score is not None:
             row['language_score'] = round(step_language_score, 2)
         row['language_training'] = bool(correction_count)

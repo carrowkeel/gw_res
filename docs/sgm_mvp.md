@@ -375,6 +375,46 @@ cost paid inside it. The
 simulator builds on the furthest bridging stage the base run completed
 (mathsft, then commsft, then pretrain).
 
+**Programmatic default and parallel experiments.** After three collapse
+rounds the deployed loop carries no online LLM: template rendering in,
+pattern parsing out, with the llm listener retained as a configuration
+option rather than the running path — the reviewer proved an unreliable
+judge at two model sizes and cannot see cross-turn template convergence
+at any size. The language-preservation candidates are instead
+independent simtrain switches meant to be compared, not argued about:
+loss_scope order_clause confines the outcome weight to the order tokens
+so earnings luck cannot touch reason language; reason_grounding requires
+an eligible turn's reason to cite the report vocabulary (a demand factor
+or a material — company names do not count, that was the template's
+trick); duplicate_form_cap bounds how much of a batch one
+digit-normalized decision form may claim, the cross-turn guard the
+per-turn repetition test cannot provide; anchor_weight distills replay
+batches toward the frozen entry checkpoint; freeze_layers and
+freeze_embeddings cut the lower stack out of sim updates entirely; and
+decision_format structured swaps the freeform register for the strict
+template, the parseable end state. The structured register covers both
+directions - field-labeled input lines ('state: quarter 3 | cash 940 |
+...', 'news: rain strong next quarter', 'advisor: sell Krouket
+Umbrellas') and the 'move: buy 3 Krouket Umbrellas | reason: rain will
+be strong next quarter' turn - deliberately disjoint from the dialogue
+register so simulation training interferes with ordinary language as
+little as possible. It is taught, not instructed: the templatesft stage
+generates teacher games programmatically (no LLM; the teacher reads the
+leaked reports, reasons cite the report vocabulary, and every taught
+line must round-trip through the structured parser) and trains the
+register by supervised imitation on top of the bridging checkpoint,
+with stage-1 replay and bridge rehearsal protecting the earlier
+registers. A structured sim run then builds on that checkpoint
+automatically and rehearses the template records
+(rehearsal_source: template). Sweeps run
+these side by side: slurm/sweep.py takes a sweep file (base config,
+common overrides, named variants), materializes one validated run tree
+per variant, and submits 8-16 independent single-GPU jobs; slm.simreport
+reduces the histories to one table — returns against the references,
+distinct/eligible/grounded rates, replay drift, collapse flags — so a
+sweep is triaged at a glance and the scrap-or-keep decisions run on
+program-owned numbers.
+
 ### Stage 3 — real problems (later)
 
 Real data as the transfer test: whether logic learned in the simulation
@@ -437,6 +477,20 @@ The base is an explicit per-submission argument (baked into the resolved
 config the job reads) rather than a value committed in sim.yaml, so
 promoting a new stage-1 run never requires editing the repo; the
 submitter refuses a simtrain submission with no base named.
+
+For structured-register runs, teach the template into the stage-1 tree
+first; the gate and the simulator then resolve the templatesft
+checkpoint automatically:
+
+    python slurm/submit.py --config configs/t1_full.yaml \
+      --stages templatesft --run-id <id>
+
+To compare the language-preservation options in parallel rather than one
+run at a time, submit a sweep and read it back as one table:
+
+    python slurm/sweep.py --sweep configs/experiments/sim_options.yaml \
+      --base-run runs/t1_full-<id>
+    python -m slm.simreport --sweep runs/sweeps/sim-options-<id>
 
 The pilot runs on one L40S: the listener LLM is capped at 0.45 GPU
 memory and shares the device with the small training model (the same
