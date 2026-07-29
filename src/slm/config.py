@@ -240,7 +240,7 @@ class TemplateSftConfig:
     evaluation_interval: int = 200
     maximum_sequence_length: int = 1024
     replay_fraction: float = 0.2
-    rehearsal_fraction: float = 0.1
+    rehearsal_fraction: float = 0.0
     rehearsal_records: int = 2048
 
 

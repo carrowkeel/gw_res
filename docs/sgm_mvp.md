@@ -403,8 +403,15 @@ generates teacher games programmatically (no LLM; the teacher reads the
 leaked reports, reasons cite the report vocabulary, and every taught
 line must round-trip through the structured parser) and trains the
 register by supervised imitation on top of the bridging checkpoint,
-with stage-1 replay and bridge rehearsal protecting the earlier
-registers. The stage grades its own result before any sweep spends GPU
+with stage-1 replay protecting general language. Bridge rehearsal
+inside the stage is off by default: the bridge's freeform decision
+turns are the register the template supersedes, so rehearsing them
+trains the closest competing behavior in decision-shaped contexts -
+the one rehearsal that can unlearn the template rather than protect
+anything worth keeping. During a structured sim run the rehearsal
+channel rehearses the template records themselves (rehearsal_source:
+template), which maintains the register rather than competing with it.
+The stage grades its own result before any sweep spends GPU
 hours on it: a generative eval plays held-out games at the simulator's
 entry difficulty and reports program-checked rates - template form,
 exact company naming, grounded and truthful reasons (the cited factor

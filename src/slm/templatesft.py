@@ -15,8 +15,12 @@ are grounded by construction and pass the sim's reason_grounding floor.
 The teacher does inject a policy - follow the strongest leaked signal -
 which is intentional: the stage teaches the register and the habit of
 reading reports; the simulator's outcome loss then owns refining the
-policy. Stage-1 replay and a rehearsal fraction of bridge records
-protect the earlier registers while this one is added.
+policy. Stage-1 replay protects general language while the register is
+added; prose is register-distant, so it cannot compete with the
+template. Bridge rehearsal is off by default and exists only as an
+option: the bridge's freeform decision turns are the one register the
+template is meant to supersede, and rehearsing them trains the closest
+competing behavior in decision-shaped contexts.
 
 The stage trains from the run tree's furthest bridging checkpoint and
 writes checkpoints/templatesft, which resolve_base_checkpoint prefers,
