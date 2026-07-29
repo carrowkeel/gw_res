@@ -29,6 +29,7 @@ automatically.
 import argparse
 import json
 import random
+from pathlib import Path
 
 from . import listener, market, render, sftstage
 from .config import load_config
@@ -210,6 +211,215 @@ def generate_records(config, tokenizer):
     return records
 
 
+def _truthful_reason(reason, game_market, leaked):
+    """Whether a reason's claim matches the actually leaked shock.
+
+    The taught reasons make one falsifiable claim in report vocabulary
+    ('rain will be strong', 'the plastic price will fall'), so the claim
+    can be checked against the leaked shocks: the cited factor must have
+    leaked and the direction word must match its level. A reason citing
+    nothing checkable, or citing a factor that never leaked, is not
+    truthful - taxidermy reasons fail here even when they ground.
+    """
+    lowered = reason.lower()
+    for factor in game_market['demand_factors']:
+        if factor in lowered:
+            if 'strong' in lowered:
+                return leaked.get(factor) == 1
+            if 'weak' in lowered:
+                return leaked.get(factor) == -1
+            return False
+    for cost_factor in game_market['cost_factors']:
+        if cost_factor.split()[0] in lowered:
+            if 'rise' in lowered:
+                return leaked.get(cost_factor) == 1
+            if 'fall' in lowered:
+                return leaked.get(cost_factor) == -1
+            return False
+    return False
+
+
+EVAL_SEED_OFFSET = 900001
+SAMPLE_LIMIT = 12
+
+
+def evaluate(config, checkpoint_path=None):
+    """Play held-out games generatively and grade the taught register.
+
+    The gate answers 'does it state valid moves'; this answers 'did the
+    register take, and does it interact'. Everything is program-checked:
+    template_rate (the strict form, either template), match_exact_rate
+    (full company names), grounded and truthful reason rates (the cited
+    factor really leaked with the claimed direction), and agreement with
+    the teacher's signal-following on the same states - the interaction
+    test that decides whether a sweep on this checkpoint can learn
+    anything. Games run at the simulator's entry difficulty with the
+    simulator's own sampling settings, because that is what the sweep
+    will face. The report lands next to the checkpoint; passes is judged
+    on template_rate against eval_template_threshold, since a model that
+    cannot hold the form gives the sim nothing to score.
+    """
+    import torch
+
+    from .simtrain import (
+        _difficulty_at, _generate_decisions, _reference_returns,
+    )
+
+    stage_config = config.templatesft
+    simtrain_config = config.simtrain
+    device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    if checkpoint_path is None:
+        checkpoint_path = sftstage.resolve_checkpoint(config.templatesft_dir)
+        if checkpoint_path is None:
+            raise SystemExit('no templatesft checkpoint under %s'
+                             % config.templatesft_dir)
+    tokenizer = SyntheticTokenizer(config.tokenizer_path)
+    model, gpt_config = sftstage.load_checkpoint_model(
+        config, checkpoint_path, device,
+        tokenizer_path=config.tokenizer_path,
+    )
+    model.eval()
+
+    field_count, companies_per_field = _difficulty_at(simtrain_config, 0)
+    teacher_random = random.Random(config.project.seed + 41)
+    games = []
+    for game_index in range(stage_config.eval_games):
+        game_random = random.Random(
+            config.project.seed + EVAL_SEED_OFFSET + game_index
+        )
+        game_market = market.sample_market(
+            game_random, field_count, companies_per_field
+        )
+        games.append({
+            'random': game_random,
+            'market': game_market,
+            'state': market.start_game(game_market, game_random),
+            'token_ids': [tokenizer.bos_id],
+            'earnings': 0.0,
+        })
+    counts = {'turns': 0, 'template': 0, 'actionable': 0, 'hold': 0,
+              'match_exact': 0, 'reason': 0, 'grounded': 0, 'truthful': 0,
+              'trade_quarters': 0, 'trade_agreements': 0,
+              'hold_quarters': 0, 'hold_agreements': 0}
+    samples = []
+    for quarter in range(simtrain_config.quarters):
+        for game in games:
+            block = render.render_structured_quarter(
+                game['state'], game['market']
+            )
+            prefix = ('\n' if quarter else '') + block
+            game['token_ids'].extend(tokenizer.encode(prefix))
+        decisions = _generate_decisions(
+            model, tokenizer, games, simtrain_config,
+            gpt_config.block_size, device,
+        )
+        for game, decision in zip(games, decisions):
+            game['token_ids'].extend(tokenizer.encode(' ' + decision))
+            parsed, match = listener.parse_structured(
+                decision, game['market'], game['state']
+            )
+            hold = not parsed and listener.hold_stated(decision)
+            reason = listener.reason_text(decision, 'structured')
+            grounded = listener.grounded_reason(reason, game['market'])
+            truthful = _truthful_reason(
+                reason, game['market'], game['state']['leaked_shocks']
+            )
+            teacher_line, teacher_action = _teacher_turn(
+                game['market'], game['state'], teacher_random, stage_config
+            )
+            counts['turns'] += 1
+            counts['template'] += int(listener.structured_move(decision))
+            counts['actionable'] += int(bool(parsed) or hold)
+            counts['hold'] += int(hold)
+            counts['match_exact'] += int(match == 'exact')
+            counts['reason'] += int(bool(reason))
+            counts['grounded'] += int(grounded)
+            counts['truthful'] += int(truthful)
+            if teacher_action is None:
+                counts['hold_quarters'] += 1
+                counts['hold_agreements'] += int(hold)
+            else:
+                counts['trade_quarters'] += 1
+                agrees = bool(parsed) and (
+                    parsed[0]['action'] == teacher_action['action']
+                    and parsed[0]['company'] == teacher_action['company']
+                )
+                counts['trade_agreements'] += int(agrees)
+            if len(samples) < SAMPLE_LIMIT:
+                samples.append({
+                    'quarter': quarter + 1,
+                    'decision': decision,
+                    'teacher': teacher_line,
+                    'match': match,
+                    'truthful_reason': truthful,
+                })
+            earnings, _ = market.step_game(
+                game['market'], game['state'], parsed, game['random'],
+                simtrain_config.market_noise_sigma,
+            )
+            game['earnings'] += earnings
+    blind_reference, oracle_reference = _reference_returns(
+        simtrain_config, config.project.seed + EVAL_SEED_OFFSET,
+        field_count, companies_per_field,
+    )
+    turns = counts['turns']
+
+    def rate(key):
+        return round(counts[key] / turns, 4) if turns else 0.0
+
+    report = {
+        'checkpoint': str(checkpoint_path),
+        'games': stage_config.eval_games,
+        'field_count': field_count,
+        'companies_per_field': companies_per_field,
+        'turns': turns,
+        'template_rate': rate('template'),
+        'actionable_rate': rate('actionable'),
+        'hold_rate': rate('hold'),
+        'match_exact_rate': rate('match_exact'),
+        'reason_rate': rate('reason'),
+        'grounded_rate': rate('grounded'),
+        'truthful_reason_rate': rate('truthful'),
+        'trade_agreement_rate': (
+            round(counts['trade_agreements'] / counts['trade_quarters'], 4)
+            if counts['trade_quarters'] else None
+        ),
+        'hold_agreement_rate': (
+            round(counts['hold_agreements'] / counts['hold_quarters'], 4)
+            if counts['hold_quarters'] else None
+        ),
+        'mean_return': round(
+            sum(game['earnings'] for game in games)
+            / max(1, stage_config.eval_games), 2
+        ),
+        'blind_reference': round(blind_reference, 2),
+        'oracle_reference': round(oracle_reference, 2),
+        'template_threshold': stage_config.eval_template_threshold,
+        'passes': bool(
+            turns and counts['template'] / turns
+            >= stage_config.eval_template_threshold
+        ),
+        'samples': samples,
+    }
+    report_path = Path(checkpoint_path).parent / 'template_eval.json'
+    with open(report_path, 'w') as handle:
+        json.dump(report, handle, indent=2)
+    logger.info(
+        'template eval: template %.3f (threshold %.2f, %s), actionable '
+        '%.3f, exact %.3f, grounded %.3f, truthful %.3f, agreement '
+        'trade %s / hold %s, return %+.1f (blind %+.1f, oracle %+.1f) '
+        'over %d turns -> %s',
+        report['template_rate'], report['template_threshold'],
+        'passes' if report['passes'] else 'BELOW THRESHOLD',
+        report['actionable_rate'], report['match_exact_rate'],
+        report['grounded_rate'], report['truthful_reason_rate'],
+        report['trade_agreement_rate'], report['hold_agreement_rate'],
+        report['mean_return'], report['blind_reference'],
+        report['oracle_reference'], turns, report_path,
+    )
+    return report
+
+
 def _write_records(records, path):
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, 'w') as handle:
@@ -275,12 +485,14 @@ def run(config):
         )
 
     checkpoint_directory = ensure_directory(config.templatesft_dir)
-    return sftstage.train_stage(
+    best = sftstage.train_stage(
         config, stage_config, tokenizer, train_records, validation_records,
         source_checkpoint, checkpoint_directory, 'templatesft',
         rehearsal_records=rehearsal_records,
         rehearsal_fraction=stage_config.rehearsal_fraction,
     )
+    evaluate(config, best)
+    return best
 
 
 def main():
@@ -290,8 +502,24 @@ def main():
     )
     parser.add_argument('--config', required=True)
     parser.add_argument('--run-id', default=None)
+    parser.add_argument(
+        '--eval-only', action='store_true',
+        help='skip training and grade an existing checkpoint',
+    )
+    parser.add_argument(
+        '--checkpoint', default=None,
+        help='checkpoint to grade with --eval-only; defaults to the '
+             'stage\'s best',
+    )
     arguments = parser.parse_args()
-    run(load_config(arguments.config, run_id=arguments.run_id))
+    config = load_config(arguments.config, run_id=arguments.run_id)
+    if arguments.eval_only:
+        checkpoint_path = (
+            Path(arguments.checkpoint) if arguments.checkpoint else None
+        )
+        evaluate(config, checkpoint_path)
+        return
+    run(config)
 
 
 if __name__ == '__main__':

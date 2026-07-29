@@ -222,6 +222,8 @@ class TemplateSftConfig:
     hold_threshold: float = 2.0
     maximum_quantity: int = 12
     holdout_fraction: float = 0.02
+    eval_games: int = 24
+    eval_template_threshold: float = 0.9
     numeric_token_weight: float = 1.0
     batch_size: int = 16
     gradient_accumulation_steps: int = 2
