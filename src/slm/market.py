@@ -101,12 +101,21 @@ def expected_return(company, known_shocks):
     return value
 
 
-def _build_reports(market, pending_shocks, random_generator):
+def _build_reports(market, pending_shocks, random_generator,
+                   report_coverage=REPORT_COVERAGE, advisor_coverage=1.0):
+    """Leak a partial view of the pending shocks as reports.
+
+    report_coverage is the per-factor leak probability and
+    advisor_coverage the probability that the advisor speaks at all this
+    quarter: the two difficulty dials. Less news means real hold
+    decisions; less advisor means the model must compose the factor
+    reports itself instead of following recommendations.
+    """
     factors = market['demand_factors'] + market['cost_factors']
     leaked = {}
     reports = []
     for factor in factors:
-        if random_generator.random() < REPORT_COVERAGE:
+        if random_generator.random() < report_coverage:
             leaked[factor] = pending_shocks[factor]
             reports.append({
                 'source': 'news',
@@ -114,7 +123,7 @@ def _build_reports(market, pending_shocks, random_generator):
                 'factor': factor,
                 'level': pending_shocks[factor],
             })
-    if leaked:
+    if leaked and random_generator.random() < advisor_coverage:
         ranked = sorted(
             market['companies'],
             key=lambda company: expected_return(company, leaked),
@@ -139,14 +148,24 @@ def _build_reports(market, pending_shocks, random_generator):
     return reports, leaked
 
 
-def start_game(market, random_generator):
+def coverage_at(start, final, quarter_index, quarters):
+    """Linear within-game ramp from start to final coverage; None holds flat."""
+    if final is None or quarters <= 1:
+        return start
+    fraction = quarter_index / (quarters - 1)
+    return start + (final - start) * fraction
+
+
+def start_game(market, random_generator, report_coverage=REPORT_COVERAGE,
+               advisor_coverage=1.0):
     """Return the opening state: flat prices, cash, and quarter-one reports."""
     prices = {
         company['name']: STARTING_PRICE for company in market['companies']
     }
     holdings = {company['name']: 0 for company in market['companies']}
     pending_shocks = _sample_shocks(market, random_generator)
-    reports, leaked = _build_reports(market, pending_shocks, random_generator)
+    reports, leaked = _build_reports(market, pending_shocks, random_generator,
+                                     report_coverage, advisor_coverage)
     return {
         'quarter': 1,
         'prices': prices,
@@ -198,7 +217,8 @@ def apply_actions(state, actions):
 
 
 def step_game(market, state, actions, random_generator,
-              noise_sigma=NOISE_SIGMA):
+              noise_sigma=NOISE_SIGMA, report_coverage=REPORT_COVERAGE,
+              advisor_coverage=1.0):
     """Advance one quarter: trade, resolve pending shocks, report the next.
 
     Actions are applied at current prices, then the pre-sampled shocks move
@@ -206,7 +226,9 @@ def step_game(market, state, actions, random_generator,
     shocks are then sampled for the following quarter and partially leaked
     as the next state's reports. Randomness consumption is independent of
     the actions taken, so games sharing a generator seed see identical
-    shock and report streams whatever the trader does.
+    shock and report streams whatever the trader does. The coverage
+    parameters apply to the next quarter's reports, so a per-quarter
+    caller can ramp difficulty within a game.
     """
     value_before = portfolio_value(state)
     executed = apply_actions(state, actions)
@@ -224,7 +246,8 @@ def step_game(market, state, actions, random_generator,
     state['last_earnings'] = earnings
     state['pending_shocks'] = _sample_shocks(market, random_generator)
     state['reports'], state['leaked_shocks'] = _build_reports(
-        market, state['pending_shocks'], random_generator
+        market, state['pending_shocks'], random_generator,
+        report_coverage, advisor_coverage,
     )
     return earnings, executed
 
@@ -291,16 +314,33 @@ def oracle_policy(market, state, random_generator):
 
 
 def play_game(policy, seed, quarters=12, field_count=3,
-              companies_per_field=2, noise_sigma=NOISE_SIGMA):
-    """Play one full game under a policy; return total and per-step earnings."""
+              companies_per_field=2, noise_sigma=NOISE_SIGMA,
+              report_coverage=REPORT_COVERAGE, advisor_coverage=1.0,
+              report_coverage_final=None, advisor_coverage_final=None):
+    """Play one full game under a policy; return total and per-step earnings.
+
+    The final coverage values, when set, ramp the difficulty linearly
+    across the game's quarters, matching what the trainer does, so
+    reference policies are measured under the same conditions.
+    """
     random_generator = random.Random(seed)
     market = sample_market(random_generator, field_count, companies_per_field)
-    state = start_game(market, random_generator)
+    state = start_game(
+        market, random_generator,
+        coverage_at(report_coverage, report_coverage_final, 0, quarters),
+        coverage_at(advisor_coverage, advisor_coverage_final, 0, quarters),
+    )
     earnings_by_quarter = []
-    for _ in range(quarters):
+    for quarter in range(quarters):
+        next_index = min(quarter + 1, quarters - 1)
         actions = policy(market, state, random_generator)
-        earnings, _ = step_game(market, state, actions, random_generator,
-                                noise_sigma)
+        earnings, _ = step_game(
+            market, state, actions, random_generator, noise_sigma,
+            coverage_at(report_coverage, report_coverage_final,
+                        next_index, quarters),
+            coverage_at(advisor_coverage, advisor_coverage_final,
+                        next_index, quarters),
+        )
         earnings_by_quarter.append(earnings)
     return sum(earnings_by_quarter), earnings_by_quarter
 

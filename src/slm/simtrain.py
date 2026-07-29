@@ -207,39 +207,71 @@ def _generate_decisions(model, tokenizer, games, simtrain_config,
     return decisions
 
 
-def _difficulty_at(simtrain_config, step):
-    """Return (field_count, companies_per_field) for a step.
+DIFFICULTY_KEYS = (
+    'field_count', 'companies_per_field', 'report_coverage',
+    'advisor_coverage', 'market_noise_sigma',
+)
 
-    The curriculum is a list of rungs ({from_step, field_count,
-    companies_per_field}); the last rung whose from_step has been reached
-    wins, and the base config values apply before any rung. Because every
-    step samples fresh markets, difficulty scales online with no cost.
+
+def _difficulty_at(simtrain_config, step):
+    """Return the difficulty settings in force at a step, as a dict.
+
+    The curriculum is a list of rungs ({from_step, <difficulty keys>});
+    the last rung whose from_step has been reached wins for each key it
+    sets, and the base config values apply before any rung. Beyond world
+    size, rungs can tighten report_coverage, advisor_coverage, and
+    market_noise_sigma, so difficulty can rise across the board over
+    training. Because every step samples fresh markets, difficulty
+    scales online with no cost.
     """
-    field_count = simtrain_config.field_count
-    companies_per_field = simtrain_config.companies_per_field
+    difficulty = {
+        key: getattr(simtrain_config, key) for key in DIFFICULTY_KEYS
+    }
     for rung in sorted(simtrain_config.curriculum,
                        key=lambda rung: rung.get('from_step', 0)):
         if step >= rung.get('from_step', 0):
-            field_count = rung.get('field_count', field_count)
-            companies_per_field = rung.get(
-                'companies_per_field', companies_per_field
-            )
-    return field_count, companies_per_field
+            for key in DIFFICULTY_KEYS:
+                if key in rung:
+                    difficulty[key] = rung[key]
+    return difficulty
 
 
-def _clause_token_count(tokenizer, decision_ids, offset):
-    """Number of decision tokens covering only the order clause.
+def _quarter_coverage(simtrain_config, difficulty, quarter_index):
+    """The (report, advisor) coverage for one quarter of a game.
 
-    The decision was encoded from the string whose reason part starts at
-    offset, so the clause is the shortest token prefix whose decoded text
-    reaches that offset. Walking prefixes is quadratic but decisions are
-    at most a few dozen tokens and this only runs under the order_clause
-    loss scope.
+    The final values, when set, ramp difficulty linearly within each
+    game - early quarters informative, late quarters thin - so a single
+    game spans a difficulty range and the model must learn when not to
+    act.
     """
+    return (
+        market.coverage_at(
+            difficulty['report_coverage'],
+            simtrain_config.report_coverage_final,
+            quarter_index, simtrain_config.quarters,
+        ),
+        market.coverage_at(
+            difficulty['advisor_coverage'],
+            simtrain_config.advisor_coverage_final,
+            quarter_index, simtrain_config.quarters,
+        ),
+    )
+
+
+def _span_token_range(tokenizer, decision_ids, start, end):
+    """Token offsets covering a character span of the encoded decision.
+
+    Walking prefixes is quadratic but decisions are at most a few dozen
+    tokens and this only runs under the order_clause loss scope.
+    """
+    first = None
     for count in range(1, len(decision_ids) + 1):
-        if len(tokenizer.decode(decision_ids[:count])) >= offset:
-            return count
-    return len(decision_ids)
+        length = len(tokenizer.decode(decision_ids[:count]))
+        if first is None and length > start:
+            first = count - 1
+        if length >= end:
+            return first if first is not None else count - 1, count
+    return first if first is not None else 0, len(decision_ids)
 
 
 def _normalized_form(text):
@@ -310,7 +342,8 @@ def _play_batch(model, tokenizer, config, llm_listener, step, block_size,
     generator so wording variation cannot desynchronize the worlds.
     """
     simtrain_config = config.simtrain
-    field_count, companies_per_field = _difficulty_at(simtrain_config, step)
+    difficulty = _difficulty_at(simtrain_config, step)
+    opening_coverage = _quarter_coverage(simtrain_config, difficulty, 0)
     repeats = max(1, simtrain_config.market_repeats)
     games = []
     for game_index in range(simtrain_config.games_per_batch):
@@ -322,14 +355,16 @@ def _play_batch(model, tokenizer, config, llm_listener, step, block_size,
             config.project.seed + step * 100003 + game_index + 500009
         )
         game_market = market.sample_market(
-            world_random, field_count, companies_per_field,
+            world_random, difficulty['field_count'],
+            difficulty['companies_per_field'],
         )
         games.append({
             'random': game_random,
             'world_random': world_random,
             'world': world_index,
             'market': game_market,
-            'state': market.start_game(game_market, world_random),
+            'state': market.start_game(game_market, world_random,
+                                       *opening_coverage),
             'token_ids': [tokenizer.bos_id],
             'spans': [],
             'clause_tokens': [],
@@ -375,16 +410,16 @@ def _play_batch(model, tokenizer, config, llm_listener, step, block_size,
             span_start = len(game['token_ids'])
             game['token_ids'].extend(decision_ids)
             game['spans'].append((span_start, len(game['token_ids'])))
-            clause_count = None
+            clause_range = None
             if simtrain_config.loss_scope == 'order_clause':
-                offset = listener_module.reason_offset(
-                    ' ' + decision_text, decision_format
+                span = listener_module.order_span(
+                    ' ' + decision_text, game['market'], decision_format
                 )
-                if offset is not None:
-                    clause_count = _clause_token_count(
-                        tokenizer, decision_ids, offset
+                if span is not None:
+                    clause_range = _span_token_range(
+                        tokenizer, decision_ids, span[0], span[1]
                     )
-            game['clause_tokens'].append(clause_count)
+            game['clause_tokens'].append(clause_range)
             turns.append((decision_text, game['market'], game['state']))
         phase_started = time.time()
         results = [
@@ -449,9 +484,14 @@ def _play_batch(model, tokenizer, config, llm_listener, step, block_size,
                 game['market'],
             )
             stats['grounded'] += int(grounded)
+            next_coverage = _quarter_coverage(
+                simtrain_config, difficulty,
+                min(quarter + 1, simtrain_config.quarters - 1),
+            )
             earnings, executed = market.step_game(
                 game['market'], game['state'], result['actions'],
-                game['world_random'], simtrain_config.market_noise_sigma,
+                game['world_random'], difficulty['market_noise_sigma'],
+                *next_coverage,
             )
             game['earnings'].append(earnings)
             game['acted'].append(bool(executed))
@@ -564,11 +604,13 @@ def _batch_tensors(games, simtrain_config, block_size, device):
             weight = max(0.0, min(weight, simtrain_config.weight_clip) - 1.0)
             if weight <= 0.0:
                 continue
-            span_limit = span_end
+            limit_start = span_start
+            limit_end = span_end
             if clause is not None:
-                span_limit = min(span_end, span_start + clause)
-            for position in range(span_start - offset - 1,
-                                  span_limit - offset - 1):
+                limit_start = min(span_end, span_start + clause[0])
+                limit_end = min(span_end, span_start + clause[1])
+            for position in range(limit_start - offset - 1,
+                                  limit_end - offset - 1):
                 if 0 <= position < len(weights):
                     weights[position] = weight
         rows.append((token_ids, weights))
@@ -603,23 +645,30 @@ def _correction_tensors(samples, block_size, device):
     return _pad_rows(rows, device)
 
 
-def _reference_returns(simtrain_config, seed, field_count,
-                       companies_per_field, sample_games=200):
-    blind = statistics.mean(
-        market.play_game(market.blind_policy, seed + index,
-                         simtrain_config.quarters, field_count,
-                         companies_per_field,
-                         simtrain_config.market_noise_sigma)[0]
-        for index in range(sample_games)
-    )
-    oracle = statistics.mean(
-        market.play_game(market.oracle_policy, seed + index,
-                         simtrain_config.quarters, field_count,
-                         companies_per_field,
-                         simtrain_config.market_noise_sigma)[0]
-        for index in range(sample_games)
-    )
-    return blind, oracle
+def _reference_returns(simtrain_config, seed, difficulty,
+                       sample_games=200):
+    """Blind and oracle returns under the same difficulty the model faces.
+
+    Coverage moves the oracle sharply (it can only read what leaks), so
+    the references must be replayed whenever any difficulty dial moves,
+    ramps included - otherwise the gap to oracle stops meaning headroom.
+    """
+    def reference(policy):
+        return statistics.mean(
+            market.play_game(
+                policy, seed + index, simtrain_config.quarters,
+                difficulty['field_count'],
+                difficulty['companies_per_field'],
+                difficulty['market_noise_sigma'],
+                difficulty['report_coverage'],
+                difficulty['advisor_coverage'],
+                simtrain_config.report_coverage_final,
+                simtrain_config.advisor_coverage_final,
+            )[0]
+            for index in range(sample_games)
+        )
+
+    return reference(market.blind_policy), reference(market.oracle_policy)
 
 
 def run(config):
@@ -747,21 +796,25 @@ def run(config):
 
     reference_cache = {}
 
-    def references_for(field_count, companies_per_field):
-        key = (field_count, companies_per_field)
+    def references_for(difficulty):
+        key = tuple(difficulty[name] for name in DIFFICULTY_KEYS)
         if key not in reference_cache:
             reference_cache[key] = _reference_returns(
-                simtrain_config, config.project.seed + 999983,
-                field_count, companies_per_field,
+                simtrain_config, config.project.seed + 999983, difficulty,
             )
             logger.info(
-                'references at %d fields x %d companies: blind %+.1f, '
-                'oracle %+.1f', field_count, companies_per_field,
+                'references at %dx%d, coverage %.2f/%.2f, sigma %.1f: '
+                'blind %+.1f, oracle %+.1f',
+                difficulty['field_count'],
+                difficulty['companies_per_field'],
+                difficulty['report_coverage'],
+                difficulty['advisor_coverage'],
+                difficulty['market_noise_sigma'],
                 reference_cache[key][0], reference_cache[key][1],
             )
         return reference_cache[key]
 
-    references_for(*_difficulty_at(simtrain_config, start_step))
+    references_for(_difficulty_at(simtrain_config, start_step))
 
     def save_checkpoint(step, tag, mean_return):
         payload = {
@@ -790,12 +843,8 @@ def run(config):
         current_learning_rate = learning_rate_at(step, simtrain_config)
         for group in optimizer.param_groups:
             group['lr'] = current_learning_rate
-        field_count, companies_per_field = _difficulty_at(
-            simtrain_config, step
-        )
-        blind_reference, oracle_reference = references_for(
-            field_count, companies_per_field
-        )
+        difficulty = _difficulty_at(simtrain_config, step)
+        blind_reference, oracle_reference = references_for(difficulty)
 
         model.eval()
         games, stats, sample_turn = _play_batch(
@@ -998,8 +1047,10 @@ def run(config):
 
         row = {
             'step': step,
-            'field_count': field_count,
-            'companies_per_field': companies_per_field,
+            'field_count': difficulty['field_count'],
+            'companies_per_field': difficulty['companies_per_field'],
+            'report_coverage': difficulty['report_coverage'],
+            'advisor_coverage': difficulty['advisor_coverage'],
             'no_signal': no_signal,
             'updated': loss is not None,
             'mean_return': round(mean_return, 2),

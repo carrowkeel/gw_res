@@ -258,6 +258,56 @@ def parse_structured(text, market, state):
     )
 
 
+def _company_mention_end(tail, company):
+    lowered = tail.lower()
+    name = company['name'].lower()
+    position = lowered.find(name)
+    if position >= 0:
+        return position + len(name)
+    first_word = company['name'].split()[0].lower()
+    found = re.search(r'\b%s\b' % re.escape(first_word), lowered)
+    if found is not None:
+        return found.end()
+    product = company['product'].lower()
+    position = lowered.find(product)
+    if position >= 0:
+        return position + len(product)
+    return None
+
+
+def order_span(text, market, decision_format='freeform'):
+    """Character span of the first order clause, verb through company.
+
+    This is where the order-clause loss scope cuts: wherever the clause
+    sits in the sentence, only its tokens carry outcome weight. The
+    first implementation cut at the reason marker instead, which left
+    reason-first turns ('Given that ..., I will buy ...') with no
+    weighted tokens at all - the trained registers lead with the reason
+    often enough that the scope was effectively empty. None when no
+    order names a known company.
+    """
+    if decision_format == 'structured':
+        found = _STRUCTURED_ORDER_PATTERN.search(text)
+        if found is None:
+            return None
+        bar = text.find('|', found.start())
+        return found.start(), bar if bar >= 0 else found.end()
+    for found in _ORDER_PATTERN.finditer(text):
+        tail = text[found.end():found.end() + 60]
+        company_name, _ = _match_company(tail, market['companies'])
+        if company_name is None:
+            continue
+        company = next(
+            candidate for candidate in market['companies']
+            if candidate['name'] == company_name
+        )
+        mention_end = _company_mention_end(tail, company)
+        if mention_end is None:
+            mention_end = len(tail)
+        return found.start(), found.end() + mention_end
+    return None
+
+
 def structured_move(text):
     """Whether the text carries the structured template at all.
 

@@ -338,6 +338,19 @@ construction), scoring each turn against the mean of its siblings'
 matching quarter — shared world luck cancels, and the advantage measures
 the decision alone.
 
+**Difficulty.** Beyond world size, two information dials make the game
+harder: report_coverage (the per-factor leak probability — less news
+means real hold decisions) and advisor_coverage (the probability the
+advisor speaks at all — the first sweep showed every winning variant
+leaning on advisor-following, so thinning the advisor forces composing
+the factor reports, the skill the market was designed to test). Both
+can rise across the board via the step curriculum, or ramp within each
+game (report_coverage_final / advisor_coverage_final interpolate
+linearly across quarters: early quarters informative, late quarters
+thin). The blind and oracle references are replayed under whichever
+difficulty is in force, ramps included, so the gap to oracle keeps
+meaning headroom.
+
 The weighting withholds imitation rather than merely modulating it, the
 lesson of the first pilots (weights centered at one imitated every turn
 at full strength, and uniform self-imitation of chatter collapsed the

@@ -48,23 +48,26 @@ def probe(model, tokenizer, config, block_size, device, games_count=None):
     holdings, but nothing is trained and nothing is charitably rewritten.
     """
     from .simtrain import _difficulty_at, _generate_decisions, \
-        _reference_returns
+        _quarter_coverage, _reference_returns
 
     simtrain_config = config.simtrain
     games_count = games_count or simtrain_config.entry_probe_games
-    field_count, companies_per_field = _difficulty_at(simtrain_config, 0)
+    difficulty = _difficulty_at(simtrain_config, 0)
+    opening_coverage = _quarter_coverage(simtrain_config, difficulty, 0)
     games = []
     for game_index in range(games_count):
         game_random = random.Random(
             config.project.seed + PROBE_SEED_OFFSET + game_index
         )
         game_market = market.sample_market(
-            game_random, field_count, companies_per_field,
+            game_random, difficulty['field_count'],
+            difficulty['companies_per_field'],
         )
         games.append({
             'random': game_random,
             'market': game_market,
-            'state': market.start_game(game_market, game_random),
+            'state': market.start_game(game_market, game_random,
+                                       *opening_coverage),
             'token_ids': [tokenizer.bos_id],
             'earnings': 0.0,
         })
@@ -117,14 +120,18 @@ def probe(model, tokenizer, config, block_size, device, games_count=None):
                     'match': match,
                     'reason_given': has_reason,
                 })
+            next_coverage = _quarter_coverage(
+                simtrain_config, difficulty,
+                min(quarter + 1, simtrain_config.quarters - 1),
+            )
             earnings, _ = market.step_game(
                 game['market'], game['state'], actions, game['random'],
-                simtrain_config.market_noise_sigma,
+                difficulty['market_noise_sigma'], *next_coverage,
             )
             game['earnings'] += earnings
     blind_reference, oracle_reference = _reference_returns(
         simtrain_config, config.project.seed + PROBE_SEED_OFFSET,
-        field_count, companies_per_field,
+        difficulty,
     )
     mean_return = (
         sum(game['earnings'] for game in games) / games_count
@@ -133,8 +140,10 @@ def probe(model, tokenizer, config, block_size, device, games_count=None):
     return {
         'games': games_count,
         'decision_format': decision_format,
-        'field_count': field_count,
-        'companies_per_field': companies_per_field,
+        'field_count': difficulty['field_count'],
+        'companies_per_field': difficulty['companies_per_field'],
+        'report_coverage': difficulty['report_coverage'],
+        'advisor_coverage': difficulty['advisor_coverage'],
         'mean_return': round(mean_return, 2),
         'blind_reference': round(blind_reference, 2),
         'oracle_reference': round(oracle_reference, 2),

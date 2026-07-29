@@ -221,6 +221,8 @@ class TemplateSftConfig:
     companies_per_field: int = 2
     hold_threshold: float = 2.0
     maximum_quantity: int = 12
+    report_coverage: float = 0.7
+    advisor_coverage: float = 1.0
     holdout_fraction: float = 0.02
     eval_games: int = 24
     eval_template_threshold: float = 0.9
@@ -301,6 +303,10 @@ class SimTrainConfig:
     rehearsal_source: str = 'bridge'
     market_repeats: int = 1
     market_noise_sigma: float = 3.0
+    report_coverage: float = 0.7
+    advisor_coverage: float = 1.0
+    report_coverage_final: float = None
+    advisor_coverage_final: float = None
     protocol_line: bool = True
     entry_threshold: float = 0.25
     entry_probe_games: int = 16
