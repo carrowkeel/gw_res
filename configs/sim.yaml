@@ -65,8 +65,8 @@ model:
 
 generate:
   default_model: Qwen/Qwen2.5-7B-Instruct
-  gpu_memory_utilization: 0.55
-  max_model_len: 2048
+  gpu_memory_utilization: 0.45
+  max_model_len: 1024
   dtype: bfloat16
   max_tokens: 96
   temperature: 0.2
