@@ -214,6 +214,35 @@ class BridgeSftConfig:
 
 
 @dataclass
+class TemplateSftConfig:
+    number_of_games: int = 4000
+    quarters: int = 8
+    field_count: int = 3
+    companies_per_field: int = 2
+    hold_threshold: float = 2.0
+    maximum_quantity: int = 12
+    holdout_fraction: float = 0.02
+    numeric_token_weight: float = 1.0
+    batch_size: int = 16
+    gradient_accumulation_steps: int = 2
+    epochs: int = 2
+    maximum_steps: int = None
+    learning_rate: float = 3e-5
+    minimum_learning_rate: float = 3e-6
+    warmup_ratio: float = 0.03
+    weight_decay: float = 0.0
+    gradient_clip: float = 1.0
+    dtype: str = 'bfloat16'
+    compile_model: bool = False
+    log_interval: int = 20
+    evaluation_interval: int = 200
+    maximum_sequence_length: int = 1024
+    replay_fraction: float = 0.2
+    rehearsal_fraction: float = 0.1
+    rehearsal_records: int = 2048
+
+
+@dataclass
 class SftEvalConfig:
     max_new_tokens: int = 64
     temperature: float = 0.3
@@ -266,6 +295,7 @@ class SimTrainConfig:
     correction_fraction: float = 0.3
     rehearsal_fraction: float = 0.0
     rehearsal_records: int = 2048
+    rehearsal_source: str = 'bridge'
     market_repeats: int = 1
     market_noise_sigma: float = 3.0
     protocol_line: bool = True
@@ -343,6 +373,7 @@ class Config:
     commsft: CommSftConfig = field(default_factory=CommSftConfig)
     mathsft: MathSftConfig = field(default_factory=MathSftConfig)
     bridgesft: BridgeSftConfig = field(default_factory=BridgeSftConfig)
+    templatesft: TemplateSftConfig = field(default_factory=TemplateSftConfig)
     sfteval: SftEvalConfig = field(default_factory=SftEvalConfig)
     simtrain: SimTrainConfig = field(default_factory=SimTrainConfig)
     eval: EvalConfig = field(default_factory=EvalConfig)
@@ -405,6 +436,14 @@ class Config:
         return self.out_dir / 'checkpoints' / 'mathsft'
 
     @property
+    def templatesft_data_dir(self):
+        return self.data_dir / 'templatesft'
+
+    @property
+    def templatesft_dir(self):
+        return self.out_dir / 'checkpoints' / 'templatesft'
+
+    @property
     def simtrain_dir(self):
         return self.out_dir / 'checkpoints' / 'simtrain'
 
@@ -439,6 +478,7 @@ _SECTION_TYPES = {
     'commsft': CommSftConfig,
     'mathsft': MathSftConfig,
     'bridgesft': BridgeSftConfig,
+    'templatesft': TemplateSftConfig,
     'sfteval': SftEvalConfig,
     'simtrain': SimTrainConfig,
     'eval': EvalConfig,

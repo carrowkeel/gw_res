@@ -120,19 +120,25 @@ def _load_replay(paths, block_size):
 
 
 def _load_rehearsal(simtrain_config, tokenizer, block_size):
-    """Bridge records as a rehearsal dataset anchoring the register.
+    """SFT records as a rehearsal dataset anchoring a register.
 
-    Stage-1 replay anchors base prose but the reason-bearing register
-    lives only in the bridge pools, so a fraction of bridge records is
-    rehearsed with response-only loss through the same dataset the
-    bridging stage trained on.
+    Stage-1 replay anchors base prose but the taught registers live only
+    in the SFT pools, so a fraction of records is rehearsed with
+    response-only loss through the same dataset the stages trained on.
+    rehearsal_source picks the register: bridge for the freeform
+    reason-bearing turns, template for the structured sim register a
+    templatesft stage taught.
     """
     from .sftstage import PlainPairDataset
 
     if not simtrain_config.base_run_dir:
         return None
+    source_directory = (
+        'templatesft' if simtrain_config.rehearsal_source == 'template'
+        else 'bridgesft'
+    )
     records_path = (Path(simtrain_config.base_run_dir) / 'data'
-                    / 'bridgesft' / 'train.jsonl')
+                    / source_directory / 'train.jsonl')
     if not records_path.exists():
         logger.warning('no bridge records at %s, rehearsal disabled',
                        records_path)

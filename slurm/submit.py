@@ -41,16 +41,17 @@ RUNG_STAGES = ['tokenizer', 'data', 'pretrain', 'finetune', 'evaluate']
 
 ALL_STAGES = [
     'generate', 'tokenizer', 'data', 'inspect', 'pretrain', 'sample',
-    'commsft', 'mathsft', 'bridgesft', 'gate', 'finetune', 'simtrain',
-    'evaluate', 'graph_transform', 'graph_tokenizer', 'graph_data',
-    'graph_pretrain', 'graph_evaluate',
+    'commsft', 'mathsft', 'bridgesft', 'templatesft', 'gate', 'finetune',
+    'simtrain', 'evaluate', 'graph_transform', 'graph_tokenizer',
+    'graph_data', 'graph_pretrain', 'graph_evaluate',
 ]
 DEFAULT_STAGES = [
     'generate', 'tokenizer', 'data', 'pretrain', 'finetune', 'evaluate',
 ]
 GPU_STAGES = {
-    'generate', 'pretrain', 'commsft', 'mathsft', 'bridgesft', 'gate',
-    'finetune', 'simtrain', 'evaluate', 'graph_pretrain', 'graph_evaluate',
+    'generate', 'pretrain', 'commsft', 'mathsft', 'bridgesft',
+    'templatesft', 'gate', 'finetune', 'simtrain', 'evaluate',
+    'graph_pretrain', 'graph_evaluate',
 }
 
 CACHE_VARIABLES = [

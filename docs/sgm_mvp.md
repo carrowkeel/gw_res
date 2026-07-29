@@ -392,7 +392,21 @@ per-turn repetition test cannot provide; anchor_weight distills replay
 batches toward the frozen entry checkpoint; freeze_layers and
 freeze_embeddings cut the lower stack out of sim updates entirely; and
 decision_format structured swaps the freeform register for the strict
-'move: ... | reason: ...' template, the parseable end state. Sweeps run
+template, the parseable end state. The structured register covers both
+directions - field-labeled input lines ('state: quarter 3 | cash 940 |
+...', 'news: rain strong next quarter', 'advisor: sell Krouket
+Umbrellas') and the 'move: buy 3 Krouket Umbrellas | reason: rain will
+be strong next quarter' turn - deliberately disjoint from the dialogue
+register so simulation training interferes with ordinary language as
+little as possible. It is taught, not instructed: the templatesft stage
+generates teacher games programmatically (no LLM; the teacher reads the
+leaked reports, reasons cite the report vocabulary, and every taught
+line must round-trip through the structured parser) and trains the
+register by supervised imitation on top of the bridging checkpoint,
+with stage-1 replay and bridge rehearsal protecting the earlier
+registers. A structured sim run then builds on that checkpoint
+automatically and rehearses the template records
+(rehearsal_source: template). Sweeps run
 these side by side: slurm/sweep.py takes a sweep file (base config,
 common overrides, named variants), materializes one validated run tree
 per variant, and submits 8-16 independent single-GPU jobs; slm.simreport
@@ -463,6 +477,13 @@ The base is an explicit per-submission argument (baked into the resolved
 config the job reads) rather than a value committed in sim.yaml, so
 promoting a new stage-1 run never requires editing the repo; the
 submitter refuses a simtrain submission with no base named.
+
+For structured-register runs, teach the template into the stage-1 tree
+first; the gate and the simulator then resolve the templatesft
+checkpoint automatically:
+
+    python slurm/submit.py --config configs/t1_full.yaml \
+      --stages templatesft --run-id <id>
 
 To compare the language-preservation options in parallel rather than one
 run at a time, submit a sweep and read it back as one table:

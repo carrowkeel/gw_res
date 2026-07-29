@@ -43,8 +43,7 @@ variants:
     overrides:
       simtrain:
         decision_format: structured
-        protocol_line: true
-        exemplar_turn: true
+        rehearsal_source: template
   - name: guarded
     overrides:
       simtrain:
