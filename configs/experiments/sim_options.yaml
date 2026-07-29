@@ -5,6 +5,7 @@ stages: [simtrain]
 common:
   simtrain:
     listener_mode: pattern
+    base_stage: bridgesft
 
 variants:
   - name: baseline
@@ -43,6 +44,7 @@ variants:
     overrides:
       simtrain:
         decision_format: structured
+        base_stage: templatesft
         rehearsal_source: template
   - name: guarded
     overrides:

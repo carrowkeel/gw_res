@@ -29,7 +29,7 @@ from . import market, render
 from .config import load_config
 from .model import GPT, build_config
 from .sftstage import (
-    checkpoint_model_config, resolve_base_checkpoint,
+    checkpoint_model_config, resolve_base_checkpoint, resolve_checkpoint,
     verify_checkpoint_tokenizer,
 )
 from .tokenizer import SyntheticTokenizer
@@ -178,6 +178,8 @@ def write_report(report, path):
 def run(config, checkpoint_path=None):
     import torch
 
+    from pathlib import Path
+
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     base = config.simtrain.base_run_dir
     if checkpoint_path is None:
@@ -186,10 +188,19 @@ def run(config, checkpoint_path=None):
                 'gate needs a base run (--base-run) or an explicit '
                 '--checkpoint'
             )
-        checkpoint_path = resolve_base_checkpoint(base)
+        if config.simtrain.base_stage:
+            checkpoint_path = resolve_checkpoint(
+                Path(base) / 'checkpoints' / config.simtrain.base_stage
+            )
+            if checkpoint_path is None:
+                raise SystemExit(
+                    'base_stage %s has no checkpoint under %s/checkpoints'
+                    % (config.simtrain.base_stage, base)
+                )
+        else:
+            checkpoint_path = resolve_base_checkpoint(base)
         if checkpoint_path is None:
             raise SystemExit('no checkpoint found under %s' % base)
-    from pathlib import Path
 
     tokenizer_path = (
         Path(base) / 'tokenizer' / 'tokenizer.json' if base

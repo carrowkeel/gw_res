@@ -87,14 +87,34 @@ logger = get_logger('simtrain')
 
 
 def _base_paths(config):
-    from .sftstage import resolve_base_checkpoint
+    """Resolve the base run's tokenizer, checkpoint, and replay data.
+
+    base_stage pins the checkpoint to a named stage instead of the
+    furthest one: once a tree carries a templatesft checkpoint the
+    furthest-stage rule would hand it to every consumer, and a freeform
+    run comparing against structured must build on the bridging
+    checkpoint, not the structured register. A pinned stage with no
+    checkpoint is an error, never a silent fallback.
+    """
+    from .sftstage import resolve_base_checkpoint, resolve_checkpoint
 
     simtrain_config = config.simtrain
     if simtrain_config.base_run_dir:
         base = Path(simtrain_config.base_run_dir)
+        if simtrain_config.base_stage:
+            checkpoint = resolve_checkpoint(
+                base / 'checkpoints' / simtrain_config.base_stage
+            )
+            if checkpoint is None:
+                raise SystemExit(
+                    'base_stage %s has no checkpoint under %s'
+                    % (simtrain_config.base_stage, base / 'checkpoints')
+                )
+        else:
+            checkpoint = resolve_base_checkpoint(base)
         return {
             'tokenizer': base / 'tokenizer' / 'tokenizer.json',
-            'checkpoint': resolve_base_checkpoint(base),
+            'checkpoint': checkpoint,
             'packed': base / 'data' / 'packed',
         }
     return {

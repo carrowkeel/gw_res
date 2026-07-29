@@ -258,6 +258,7 @@ class SftEvalConfig:
 @dataclass
 class SimTrainConfig:
     base_run_dir: str = None
+    base_stage: str = None
     games_per_batch: int = 32
     quarters: int = 8
     field_count: int = 3
