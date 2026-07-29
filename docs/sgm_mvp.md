@@ -414,7 +414,13 @@ to the checkpoint as template_eval.json; passes gates on the template
 rate, and the agreement and truthful columns say whether the model
 merely holds the form or actually reads the reports. A structured sim
 run then builds on that checkpoint automatically and rehearses the
-template records (rehearsal_source: template). Sweeps run
+template records (rehearsal_source: template). Because the
+furthest-stage rule would hand the templatesft checkpoint to every
+consumer of the tree, a variant meant to run freeform pins its base
+with simtrain.base_stage (the shipped sweep pins bridgesft in common
+and templatesft in the structured variant), and a pinned stage with no
+checkpoint fails at startup rather than silently falling back. Sweeps
+run
 these side by side: slurm/sweep.py takes a sweep file (base config,
 common overrides, named variants), materializes one validated run tree
 per variant, and submits 8-16 independent single-GPU jobs; slm.simreport
