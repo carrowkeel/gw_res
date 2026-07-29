@@ -40,7 +40,7 @@ simtrain:
   sample_top_p: 0.95
   max_decision_tokens: 48
   listener_mode: llm
-  listener_model: Qwen/Qwen2.5-3B-Instruct
+  listener_model: Qwen/Qwen2.5-7B-Instruct
   no_reason_anneal_steps: 100
   language_score_drop: 0.3
   language_score_window: 20
@@ -65,7 +65,7 @@ model:
 
 generate:
   default_model: Qwen/Qwen2.5-7B-Instruct
-  gpu_memory_utilization: 0.35
+  gpu_memory_utilization: 0.55
   max_model_len: 2048
   dtype: bfloat16
   max_tokens: 96
