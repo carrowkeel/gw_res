@@ -258,6 +258,17 @@ def parse_structured(text, market, state):
     )
 
 
+def structured_move(text):
+    """Whether the text carries the structured template at all.
+
+    True for both template forms, order and hold, regardless of whether
+    the named company exists or the order is feasible - this is the
+    register test, not the feasibility test.
+    """
+    return bool(_STRUCTURED_ORDER_PATTERN.search(text)
+                or _STRUCTURED_HOLD_PATTERN.search(text))
+
+
 def parse_decision(text, market, state, decision_format='freeform'):
     """Parse one trader turn under the configured decision format."""
     if decision_format == 'structured':

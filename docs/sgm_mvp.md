@@ -404,9 +404,17 @@ leaked reports, reasons cite the report vocabulary, and every taught
 line must round-trip through the structured parser) and trains the
 register by supervised imitation on top of the bridging checkpoint,
 with stage-1 replay and bridge rehearsal protecting the earlier
-registers. A structured sim run then builds on that checkpoint
-automatically and rehearses the template records
-(rehearsal_source: template). Sweeps run
+registers. The stage grades its own result before any sweep spends GPU
+hours on it: a generative eval plays held-out games at the simulator's
+entry difficulty and reports program-checked rates - template form,
+exact company naming, grounded and truthful reasons (the cited factor
+really leaked with the claimed direction), and agreement with the
+teacher's signal-following, the interaction test. The report lands next
+to the checkpoint as template_eval.json; passes gates on the template
+rate, and the agreement and truthful columns say whether the model
+merely holds the form or actually reads the reports. A structured sim
+run then builds on that checkpoint automatically and rehearses the
+template records (rehearsal_source: template). Sweeps run
 these side by side: slurm/sweep.py takes a sweep file (base config,
 common overrides, named variants), materializes one validated run tree
 per variant, and submits 8-16 independent single-GPU jobs; slm.simreport
@@ -480,10 +488,14 @@ submitter refuses a simtrain submission with no base named.
 
 For structured-register runs, teach the template into the stage-1 tree
 first; the gate and the simulator then resolve the templatesft
-checkpoint automatically:
+checkpoint automatically. The stage evaluates itself at the end
+(template_eval.json next to the checkpoint) and the eval can be rerun
+alone against any checkpoint:
 
     python slurm/submit.py --config configs/t1_full.yaml \
       --stages templatesft --run-id <id>
+    python -m slm.templatesft --config runs/t1_full-<id>/config.resolved.yaml \
+      --eval-only
 
 To compare the language-preservation options in parallel rather than one
 run at a time, submit a sweep and read it back as one table:
