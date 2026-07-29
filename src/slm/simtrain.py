@@ -645,6 +645,37 @@ def _correction_tensors(samples, block_size, device):
     return _pad_rows(rows, device)
 
 
+def _write_transcript_moves(path, games, simtrain_config, seed, step):
+    """Append a random sample of single moves, one JSON line per move.
+
+    Whole-game dumps proved too dense to read, so the transcript is a
+    handful of randomly sampled turns per logged step: each line carries
+    one quarter's rendered context and the model's move in it, with the
+    null review fields dropped. Sampling is seeded per step so a rerun
+    logs the same moves.
+    """
+    positions = [
+        (game_index, quarter)
+        for game_index, game in enumerate(games)
+        for quarter in range(len(game['turn_records']))
+    ]
+    sample_random = random.Random(seed + step * 7919)
+    chosen = sample_random.sample(
+        positions, min(simtrain_config.transcript_moves, len(positions))
+    )
+    with open(path, 'a') as handle:
+        for game_index, quarter in sorted(chosen):
+            game = games[game_index]
+            row = {'step': step, 'game': game_index}
+            row.update({
+                key: value
+                for key, value in game['turn_records'][quarter].items()
+                if value is not None
+            })
+            row['eligible'] = game['eligible'][quarter]
+            handle.write(json.dumps(row, ensure_ascii=False) + '\n')
+
+
 def _reference_returns(simtrain_config, seed, difficulty,
                        sample_games=200):
     """Blind and oracle returns under the same difficulty the model faces.
@@ -1112,17 +1143,14 @@ def run(config):
         with open(history_path, 'a') as handle:
             handle.write(json.dumps(row) + '\n')
 
-        if (simtrain_config.transcript_interval
-                and step % simtrain_config.transcript_interval == 0):
-            with open(checkpoint_directory / 'transcripts.jsonl',
-                      'a') as handle:
-                for game in games[:simtrain_config.transcript_games]:
-                    handle.write(json.dumps({
-                        'step': step,
-                        'text': tokenizer.decode(game['token_ids']),
-                        'turns': game['turn_records'],
-                        'total_earnings': round(sum(game['earnings']), 2),
-                    }, ensure_ascii=False) + '\n')
+        last_step = step == simtrain_config.maximum_steps - 1
+        if simtrain_config.transcript_interval and (
+                step % simtrain_config.transcript_interval == 0
+                or last_step):
+            _write_transcript_moves(
+                checkpoint_directory / 'transcripts.jsonl', games,
+                simtrain_config, config.project.seed, step,
+            )
 
         if step % simtrain_config.log_interval == 0:
             elapsed = time.time() - interval_start

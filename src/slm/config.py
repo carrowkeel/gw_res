@@ -317,8 +317,8 @@ class SimTrainConfig:
     log_interval: int = 10
     checkpoint_interval: int = 100
     best_window: int = 20
-    transcript_interval: int = 50
-    transcript_games: int = 4
+    transcript_interval: int = 10
+    transcript_moves: int = 5
 
 
 @dataclass
