@@ -147,16 +147,17 @@ def _load_rehearsal(simtrain_config, tokenizer, block_size):
     response-only loss through the same dataset the stages trained on.
     rehearsal_source picks the register: bridge for the freeform
     reason-bearing turns, template for the structured sim register a
-    templatesft stage taught.
+    templatesft stage taught, or any other name verbatim as a data
+    subdirectory - which is how a tagged teacher variant (data under
+    templatesft-<tag>) is rehearsed.
     """
     from .sftstage import PlainPairDataset
 
     if not simtrain_config.base_run_dir:
         return None
-    source_directory = (
-        'templatesft' if simtrain_config.rehearsal_source == 'template'
-        else 'bridgesft'
-    )
+    aliases = {'bridge': 'bridgesft', 'template': 'templatesft'}
+    source_directory = aliases.get(simtrain_config.rehearsal_source,
+                                   simtrain_config.rehearsal_source)
     records_path = (Path(simtrain_config.base_run_dir) / 'data'
                     / source_directory / 'train.jsonl')
     if not records_path.exists():
@@ -209,7 +210,7 @@ def _generate_decisions(model, tokenizer, games, simtrain_config,
 
 DIFFICULTY_KEYS = (
     'field_count', 'companies_per_field', 'report_coverage',
-    'advisor_coverage', 'market_noise_sigma',
+    'advisor_coverage', 'market_noise_sigma', 'numeric_reports',
 )
 
 
@@ -374,7 +375,7 @@ def _play_batch(model, tokenizer, config, llm_listener, step, block_size,
             'turn_records': [],
         })
     stats = {'turns': 0, 'no_reason': 0, 'acted': 0, 'eligible': 0,
-             'grounded': 0, 'form_capped': 0,
+             'grounded': 0, 'truthful': 0, 'form_capped': 0,
              'match_exact': 0, 'match_fuzzy': 0, 'match_none': 0,
              'advisor_earnings': [], 'no_advisor_earnings': [],
              'language_scores': [], 'decisions': [],
@@ -395,6 +396,8 @@ def _play_batch(model, tokenizer, config, llm_listener, step, block_size,
                 protocol_line=simtrain_config.protocol_line,
                 exemplar_turn=simtrain_config.exemplar_turn,
                 decision_format=decision_format,
+                input_variety=simtrain_config.input_variety,
+                numeric_reports=difficulty['numeric_reports'],
             )
             game['block'] = block
             prefix = ('\n' if quarter else '') + block
@@ -479,11 +482,17 @@ def _play_batch(model, tokenizer, config, llm_listener, step, block_size,
                 report['source'] == 'advisor'
                 for report in game['state']['reports']
             )
+            reason_value = listener_module.reason_text(
+                turn[0], decision_format
+            )
             grounded = listener_module.grounded_reason(
-                listener_module.reason_text(turn[0], decision_format),
-                game['market'],
+                reason_value, game['market']
             )
             stats['grounded'] += int(grounded)
+            stats['truthful'] += int(listener_module.truthful_reason(
+                reason_value, game['market'],
+                game['state']['leaked_shocks'],
+            ))
             next_coverage = _quarter_coverage(
                 simtrain_config, difficulty,
                 min(quarter + 1, simtrain_config.quarters - 1),
@@ -1092,6 +1101,8 @@ def run(config):
             'acted_rate': round(stats['acted'] / stats['turns'], 3),
             'eligible_rate': round(stats['eligible'] / stats['turns'], 3),
             'grounded_rate': round(stats['grounded'] / stats['turns'], 3),
+            'truthful_reason_rate': round(
+                stats['truthful'] / stats['turns'], 3),
             'distinct_decision_rate': round(
                 len(set(stats['decisions'])) / stats['turns'], 3),
             'match_exact_rate': round(

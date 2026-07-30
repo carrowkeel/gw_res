@@ -27,6 +27,18 @@ import re
 
 REASON_MARKERS = ['because', 'since ', 'as the', 'as it', 'given that']
 
+DEMAND_LEVEL_WORDS = {
+    1: ('strong', 'high', 'booming'),
+    0: ('steady', 'flat', 'unchanged'),
+    -1: ('weak', 'low', 'soft'),
+}
+
+COST_LEVEL_WORDS = {
+    1: ('rise', 'climb', 'increase'),
+    0: ('hold steady', 'stay level', 'stay flat'),
+    -1: ('fall', 'drop', 'decrease'),
+}
+
 _ORDER_PATTERN = re.compile(
     r'\b(buy|sell)(?:ing)?\b\s+(?:(\d+|all)\s+)?(?:shares?\s+(?:of\s+)?)?',
     re.IGNORECASE,
@@ -120,6 +132,36 @@ def grounded_reason(reason, market):
     return any(term.lower() in lowered for term in terms)
 
 
+def _level_claim(lowered, level_words):
+    for level, words in level_words.items():
+        if any(word in lowered for word in words):
+            return level
+    return None
+
+
+def truthful_reason(reason, market, leaked):
+    """Whether a reason's claim matches the actually leaked shock.
+
+    A taught reason makes one falsifiable claim in report vocabulary
+    ('rain will be strong', 'the plastic price will fall'), so the claim
+    can be checked against the leaked shocks: the cited factor must have
+    leaked and the claimed direction must match its level, in any of the
+    level-word synonyms the reports themselves use. A reason citing
+    nothing checkable, or citing a factor that never leaked, is not
+    truthful - taxidermy reasons fail here even when they ground.
+    """
+    lowered = reason.lower()
+    for factor in market['demand_factors']:
+        if factor in lowered:
+            level = _level_claim(lowered, DEMAND_LEVEL_WORDS)
+            return level is not None and leaked.get(factor) == level
+    for cost_factor in market['cost_factors']:
+        if cost_factor.split()[0] in lowered:
+            level = _level_claim(lowered, COST_LEVEL_WORDS)
+            return level is not None and leaked.get(cost_factor) == level
+    return False
+
+
 def hold_stated(text):
     """Whether the text states a deliberate hold, in the trained wording.
 
@@ -172,7 +214,15 @@ def parse_review(reply):
     return score, correction
 
 
-def _match_company(fragment, companies):
+def _match_company(fragment, companies, allow_product=True):
+    """Match a company by full name, first word, or (optionally) product.
+
+    The product fallback is charity for the freeform register, where a
+    half-learned model says 'the umbrella company'. The structured
+    register is taught with exact names, so there the fallback would
+    execute an arbitrary same-product company when the model garbles a
+    name - noise injected into the outcome signal - and is disabled.
+    """
     lowered = fragment.lower()
     for company in companies:
         if company['name'].lower() in lowered:
@@ -181,10 +231,11 @@ def _match_company(fragment, companies):
         first_word = company['name'].split()[0].lower()
         if re.search(r'\b%s\b' % re.escape(first_word), lowered):
             return company['name'], 'fuzzy'
-    for company in companies:
-        product = company['product'].lower()
-        if product in lowered:
-            return company['name'], 'fuzzy'
+    if allow_product:
+        for company in companies:
+            product = company['product'].lower()
+            if product in lowered:
+                return company['name'], 'fuzzy'
     return None, 'none'
 
 
@@ -247,7 +298,8 @@ def parse_structured(text, market, state):
     if found is None:
         return [], 'none'
     verb = found.group(1).lower()
-    company, match = _match_company(found.group(3), market['companies'])
+    company, match = _match_company(found.group(3), market['companies'],
+                                    allow_product=False)
     if company is None:
         return [], 'none'
     quantity = _clamp_quantity(verb, company, found.group(2), state)
