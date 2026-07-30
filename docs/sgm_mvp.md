@@ -357,7 +357,16 @@ codes the policy keys on without reading. The listener owns the
 vocabulary, the renderer speaks it, and the truthful-reason check
 accepts any synonym of the claimed level - truthful_reason_rate is
 logged every step, so reason-lying under outcome pressure is a curve
-per variant rather than a transcript anecdote.
+per variant rather than a transcript anecdote. A fourth dial,
+advisor_accuracy, keeps the advisor present but makes it fallible:
+below 1.0 each tip independently names a uniformly random company with
+probability one minus accuracy, so blind tip-following stops paying and
+the profitable policy must cross-check tips against the news lines.
+Round 3 showed that removing the advisor (coverage annealing or
+no-advisor) strips the profit without transferring the composition
+skill; corrupting it instead attacks the crutch while leaving the
+signal in place. The oracle reference reads leaked shocks directly and
+never sees tips, so headroom stays defined by the news.
 
 **Arithmetic in the game.** The bridge taught place-value arithmetic
 and the baseline sim never asks for it: verb plus company name wins,
@@ -376,6 +385,19 @@ alongside the level word ('rain strong +4', the co-rendered on-ramp
 where the number is redundant) or instead of it ('rain +4', where
 composing the weighted sum is the only way to rank companies);
 annealing both to only through curriculum rungs is the gap control.
+Round 4 settled this pair: the sizing teacher on calm noise was the
+program's first clear win (best headroom with the register intact),
+while numeric_reports lost on every axis - 'both' leaked digit runs
+into the output quantity slot, 'only' left word reasons decorative, and
+the anneal collapsed truthfulness at the switch - so the axis is
+retired and the arithmetic that pays lives in the output channel.
+Round 4 also exposed a taught-distribution gap on the sell side: the
+teacher only sells on negative signal, but outcome training rewards
+funding sells (liquidate a signal-less holding when a strong buy exists
+and cash is short), so models invented them and confabulated the
+reasons. teacher_rotation closes the gap by demonstrating the funding
+sell with a truthful reason citing the buy target's leaked factor
+(templatesft --tag sizing-rot --teacher-sizing --teacher-rotation).
 
 The weighting withholds imitation rather than merely modulating it, the
 lesson of the first pilots (weights centered at one imitated every turn
@@ -550,10 +572,14 @@ alone against any checkpoint:
       --eval-only
 
 A teacher variant is taught beside the canonical stage with a tag; the
-sizing teacher for the arithmetic experiments is:
+sizing teacher for the arithmetic experiments and the rotation teacher
+that adds truthful funding sells are:
 
     python -m slm.templatesft --config runs/t1_full-<id>/config.resolved.yaml \
       --tag sizing --teacher-sizing --numeric-token-weight 3.0
+    python -m slm.templatesft --config runs/t1_full-<id>/config.resolved.yaml \
+      --tag sizing-rot --teacher-sizing --teacher-rotation \
+      --numeric-token-weight 3.0
 
 To compare the language-preservation options in parallel rather than one
 run at a time, submit a sweep and read it back as one table:

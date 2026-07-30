@@ -224,6 +224,7 @@ class BridgeSftConfig:
 class TemplateSftConfig:
     tag: str = None
     teacher_sizing: bool = False
+    teacher_rotation: bool = False
     number_of_games: int = 4000
     quarters: int = 8
     field_count: int = 3
@@ -316,6 +317,7 @@ class SimTrainConfig:
     market_noise_sigma: float = 3.0
     report_coverage: float = 0.7
     advisor_coverage: float = 1.0
+    advisor_accuracy: float = 1.0
     report_coverage_final: float = None
     advisor_coverage_final: float = None
     input_variety: bool = False

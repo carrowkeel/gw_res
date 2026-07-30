@@ -67,7 +67,8 @@ def probe(model, tokenizer, config, block_size, device, games_count=None):
             'random': game_random,
             'market': game_market,
             'state': market.start_game(game_market, game_random,
-                                       *opening_coverage),
+                                       *opening_coverage,
+                                       difficulty['advisor_accuracy']),
             'token_ids': [tokenizer.bos_id],
             'earnings': 0.0,
         })
@@ -129,6 +130,7 @@ def probe(model, tokenizer, config, block_size, device, games_count=None):
             earnings, _ = market.step_game(
                 game['market'], game['state'], actions, game['random'],
                 difficulty['market_noise_sigma'], *next_coverage,
+                difficulty['advisor_accuracy'],
             )
             game['earnings'] += earnings
     blind_reference, oracle_reference = _reference_returns(
@@ -146,6 +148,7 @@ def probe(model, tokenizer, config, block_size, device, games_count=None):
         'companies_per_field': difficulty['companies_per_field'],
         'report_coverage': difficulty['report_coverage'],
         'advisor_coverage': difficulty['advisor_coverage'],
+        'advisor_accuracy': difficulty['advisor_accuracy'],
         'mean_return': round(mean_return, 2),
         'blind_reference': round(blind_reference, 2),
         'oracle_reference': round(oracle_reference, 2),
