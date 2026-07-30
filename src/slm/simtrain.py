@@ -210,7 +210,8 @@ def _generate_decisions(model, tokenizer, games, simtrain_config,
 
 DIFFICULTY_KEYS = (
     'field_count', 'companies_per_field', 'report_coverage',
-    'advisor_coverage', 'market_noise_sigma', 'numeric_reports',
+    'advisor_coverage', 'advisor_accuracy', 'market_noise_sigma',
+    'numeric_reports',
 )
 
 
@@ -220,9 +221,9 @@ def _difficulty_at(simtrain_config, step):
     The curriculum is a list of rungs ({from_step, <difficulty keys>});
     the last rung whose from_step has been reached wins for each key it
     sets, and the base config values apply before any rung. Beyond world
-    size, rungs can tighten report_coverage, advisor_coverage, and
-    market_noise_sigma, so difficulty can rise across the board over
-    training. Because every step samples fresh markets, difficulty
+    size, rungs can tighten report_coverage, advisor_coverage,
+    advisor_accuracy, and market_noise_sigma, so difficulty can rise
+    across the board over training. Because every step samples fresh markets, difficulty
     scales online with no cost.
     """
     difficulty = {
@@ -365,7 +366,8 @@ def _play_batch(model, tokenizer, config, llm_listener, step, block_size,
             'world': world_index,
             'market': game_market,
             'state': market.start_game(game_market, world_random,
-                                       *opening_coverage),
+                                       *opening_coverage,
+                                       difficulty['advisor_accuracy']),
             'token_ids': [tokenizer.bos_id],
             'spans': [],
             'clause_tokens': [],
@@ -500,7 +502,7 @@ def _play_batch(model, tokenizer, config, llm_listener, step, block_size,
             earnings, executed = market.step_game(
                 game['market'], game['state'], result['actions'],
                 game['world_random'], difficulty['market_noise_sigma'],
-                *next_coverage,
+                *next_coverage, difficulty['advisor_accuracy'],
             )
             game['earnings'].append(earnings)
             game['acted'].append(bool(executed))
@@ -704,6 +706,7 @@ def _reference_returns(simtrain_config, seed, difficulty,
                 difficulty['advisor_coverage'],
                 simtrain_config.report_coverage_final,
                 simtrain_config.advisor_coverage_final,
+                difficulty['advisor_accuracy'],
             )[0]
             for index in range(sample_games)
         )
@@ -1091,6 +1094,7 @@ def run(config):
             'companies_per_field': difficulty['companies_per_field'],
             'report_coverage': difficulty['report_coverage'],
             'advisor_coverage': difficulty['advisor_coverage'],
+            'advisor_accuracy': difficulty['advisor_accuracy'],
             'no_signal': no_signal,
             'updated': loss is not None,
             'mean_return': round(mean_return, 2),

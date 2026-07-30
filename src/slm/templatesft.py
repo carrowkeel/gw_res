@@ -117,6 +117,13 @@ def _teacher_turn(game_market, state, random_generator, stage_config):
     signal a third; strong negatives sell everything, weak ones half),
     so the mapping from cash, price, and signal strength to a share
     count is demonstrated rather than left to luck.
+
+    With teacher_rotation the teacher also demonstrates the funding
+    sell the outcome landscape rewards: when a strong buy exists but
+    cash cannot cover a single share, liquidate a holding that has no
+    positive signal, citing the buy target's leaked factor. Round-4
+    models discovered this rotation on their own and confabulated
+    reasons for it; teaching it gives the move a truthful form.
     """
     leaked = state['leaked_shocks']
     worst_value = 0.0
@@ -173,6 +180,28 @@ def _teacher_turn(game_market, state, random_generator, stage_config):
             action = {'action': 'buy', 'company': best['name'],
                       'quantity': quantity}
             return line, action
+        if (stage_config.teacher_rotation and affordable == 0
+                and reason is not None):
+            rotation = None
+            rotation_value = 0.0
+            for company in game_market['companies']:
+                if company is best:
+                    continue
+                if state['holdings'][company['name']] <= 0:
+                    continue
+                value = market.expected_return(company, leaked)
+                if rotation is None or value < rotation_value:
+                    rotation = company
+                    rotation_value = value
+            if rotation is not None and rotation_value <= 0.0:
+                line = 'move: sell all %s | reason: %s' % (
+                    rotation['name'], reason
+                )
+                action = {
+                    'action': 'sell', 'company': rotation['name'],
+                    'quantity': state['holdings'][rotation['name']],
+                }
+                return line, action
     line = 'move: hold | reason: %s' % random_generator.choice(HOLD_REASONS)
     return line, None
 
@@ -564,6 +593,11 @@ def main():
         help='teach signal-proportional quantities instead of random ones',
     )
     parser.add_argument(
+        '--teacher-rotation', action='store_true',
+        help='also teach funding sells: liquidate a signal-less holding '
+             'when a strong buy exists but cash is short',
+    )
+    parser.add_argument(
         '--numeric-token-weight', type=float, default=None,
         help='upweight digit tokens in the training loss, pressuring '
              'quantities to be right rather than merely present',
@@ -574,6 +608,8 @@ def main():
         config.templatesft.tag = arguments.tag
     if arguments.teacher_sizing:
         config.templatesft.teacher_sizing = True
+    if arguments.teacher_rotation:
+        config.templatesft.teacher_rotation = True
     if arguments.numeric_token_weight is not None:
         config.templatesft.numeric_token_weight = \
             arguments.numeric_token_weight

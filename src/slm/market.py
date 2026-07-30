@@ -101,8 +101,25 @@ def expected_return(company, known_shocks):
     return value
 
 
+def _advised_company(company, market, random_generator, advisor_accuracy):
+    """The company a tip names: the right one, or a random one on error.
+
+    At accuracy 1.0 no randomness is drawn, so existing report streams
+    are unchanged; below it each tip independently errs with probability
+    one minus accuracy and names a uniformly random company instead,
+    making tips worth exactly as much as they can be verified against
+    the news lines.
+    """
+    if advisor_accuracy >= 1.0:
+        return company['name']
+    if random_generator.random() < advisor_accuracy:
+        return company['name']
+    return random_generator.choice(market['companies'])['name']
+
+
 def _build_reports(market, pending_shocks, random_generator,
-                   report_coverage=REPORT_COVERAGE, advisor_coverage=1.0):
+                   report_coverage=REPORT_COVERAGE, advisor_coverage=1.0,
+                   advisor_accuracy=1.0):
     """Leak a partial view of the pending shocks as reports.
 
     report_coverage is the per-factor leak probability and
@@ -110,6 +127,9 @@ def _build_reports(market, pending_shocks, random_generator,
     quarter: the two difficulty dials. Less news means real hold
     decisions; less advisor means the model must compose the factor
     reports itself instead of following recommendations.
+    advisor_accuracy is a third dial: below 1.0 the advisor sometimes
+    names the wrong company, so following tips blindly stops paying and
+    the model must weigh them against the news.
     """
     factors = market['demand_factors'] + market['cost_factors']
     leaked = {}
@@ -134,14 +154,16 @@ def _build_reports(market, pending_shocks, random_generator,
             reports.append({
                 'source': 'advisor',
                 'kind': 'recommendation',
-                'company': best['name'],
+                'company': _advised_company(best, market, random_generator,
+                                            advisor_accuracy),
                 'stance': 'buy',
             })
         if expected_return(worst, leaked) < 0:
             reports.append({
                 'source': 'advisor',
                 'kind': 'recommendation',
-                'company': worst['name'],
+                'company': _advised_company(worst, market, random_generator,
+                                            advisor_accuracy),
                 'stance': 'sell',
             })
     random_generator.shuffle(reports)
@@ -157,7 +179,7 @@ def coverage_at(start, final, quarter_index, quarters):
 
 
 def start_game(market, random_generator, report_coverage=REPORT_COVERAGE,
-               advisor_coverage=1.0):
+               advisor_coverage=1.0, advisor_accuracy=1.0):
     """Return the opening state: flat prices, cash, and quarter-one reports."""
     prices = {
         company['name']: STARTING_PRICE for company in market['companies']
@@ -165,7 +187,8 @@ def start_game(market, random_generator, report_coverage=REPORT_COVERAGE,
     holdings = {company['name']: 0 for company in market['companies']}
     pending_shocks = _sample_shocks(market, random_generator)
     reports, leaked = _build_reports(market, pending_shocks, random_generator,
-                                     report_coverage, advisor_coverage)
+                                     report_coverage, advisor_coverage,
+                                     advisor_accuracy)
     return {
         'quarter': 1,
         'prices': prices,
@@ -218,7 +241,7 @@ def apply_actions(state, actions):
 
 def step_game(market, state, actions, random_generator,
               noise_sigma=NOISE_SIGMA, report_coverage=REPORT_COVERAGE,
-              advisor_coverage=1.0):
+              advisor_coverage=1.0, advisor_accuracy=1.0):
     """Advance one quarter: trade, resolve pending shocks, report the next.
 
     Actions are applied at current prices, then the pre-sampled shocks move
@@ -247,7 +270,7 @@ def step_game(market, state, actions, random_generator,
     state['pending_shocks'] = _sample_shocks(market, random_generator)
     state['reports'], state['leaked_shocks'] = _build_reports(
         market, state['pending_shocks'], random_generator,
-        report_coverage, advisor_coverage,
+        report_coverage, advisor_coverage, advisor_accuracy,
     )
     return earnings, executed
 
@@ -316,7 +339,8 @@ def oracle_policy(market, state, random_generator):
 def play_game(policy, seed, quarters=12, field_count=3,
               companies_per_field=2, noise_sigma=NOISE_SIGMA,
               report_coverage=REPORT_COVERAGE, advisor_coverage=1.0,
-              report_coverage_final=None, advisor_coverage_final=None):
+              report_coverage_final=None, advisor_coverage_final=None,
+              advisor_accuracy=1.0):
     """Play one full game under a policy; return total and per-step earnings.
 
     The final coverage values, when set, ramp the difficulty linearly
@@ -329,6 +353,7 @@ def play_game(policy, seed, quarters=12, field_count=3,
         market, random_generator,
         coverage_at(report_coverage, report_coverage_final, 0, quarters),
         coverage_at(advisor_coverage, advisor_coverage_final, 0, quarters),
+        advisor_accuracy,
     )
     earnings_by_quarter = []
     for quarter in range(quarters):
@@ -340,6 +365,7 @@ def play_game(policy, seed, quarters=12, field_count=3,
                         next_index, quarters),
             coverage_at(advisor_coverage, advisor_coverage_final,
                         next_index, quarters),
+            advisor_accuracy,
         )
         earnings_by_quarter.append(earnings)
     return sum(earnings_by_quarter), earnings_by_quarter
