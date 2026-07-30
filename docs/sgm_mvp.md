@@ -581,6 +581,20 @@ that adds truthful funding sells are:
       --tag sizing-rot --teacher-sizing --teacher-rotation \
       --numeric-token-weight 3.0
 
+A sweep can also train its teachers itself: a teachers section in the
+sweep file lists tagged templatesft stages with their overrides, each
+taught into the base run tree by its own job. Teachers whose
+checkpoints already exist are skipped (--reteach forces them), and a
+variant whose base_stage or rehearsal_source names a freshly submitted
+teacher waits on that job through a Slurm dependency, so a sweep
+mixing several teachers launches as one command. The teacher itself is
+tip-blind (it acts from the leaked shocks), which makes
+templatesft.advisor_accuracy a data-disambiguation lever: taught games
+with corrupted tips contain demonstrations that visibly ignore wrong
+advisor lines and follow the news, forcing imitation to learn
+composition rather than tip-copying - the two policies are
+observationally equivalent on clean-tip data.
+
 To compare the language-preservation options in parallel rather than one
 run at a time, submit a sweep and read it back as one table:
 
