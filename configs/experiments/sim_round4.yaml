@@ -8,6 +8,16 @@ common:
     decision_format: structured
     base_stage: templatesft
     rehearsal_source: template
+    curriculum:
+      - from_step: 0
+        field_count: 2
+        companies_per_field: 2
+      - from_step: 60
+        field_count: 3
+        companies_per_field: 2
+      - from_step: 120
+        field_count: 4
+        companies_per_field: 3
 
 variants:
   - name: control
@@ -33,12 +43,14 @@ variants:
         numeric_reports: both
         curriculum:
           - from_step: 0
-            field_count: 1
+            field_count: 2
             companies_per_field: 2
           - from_step: 60
-            field_count: 2
-          - from_step: 120
             field_count: 3
+            companies_per_field: 2
+          - from_step: 120
+            field_count: 4
+            companies_per_field: 3
             numeric_reports: only
   - name: numeric-only
     overrides:
@@ -53,12 +65,14 @@ variants:
         numeric_reports: both
         curriculum:
           - from_step: 0
-            field_count: 1
+            field_count: 2
             companies_per_field: 2
           - from_step: 60
-            field_count: 2
-          - from_step: 120
             field_count: 3
+            companies_per_field: 2
+          - from_step: 120
+            field_count: 4
+            companies_per_field: 3
             numeric_reports: only
   - name: numeric-variety
     overrides:
