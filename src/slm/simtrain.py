@@ -147,16 +147,17 @@ def _load_rehearsal(simtrain_config, tokenizer, block_size):
     response-only loss through the same dataset the stages trained on.
     rehearsal_source picks the register: bridge for the freeform
     reason-bearing turns, template for the structured sim register a
-    templatesft stage taught.
+    templatesft stage taught, or any other name verbatim as a data
+    subdirectory - which is how a tagged teacher variant (data under
+    templatesft-<tag>) is rehearsed.
     """
     from .sftstage import PlainPairDataset
 
     if not simtrain_config.base_run_dir:
         return None
-    source_directory = (
-        'templatesft' if simtrain_config.rehearsal_source == 'template'
-        else 'bridgesft'
-    )
+    aliases = {'bridge': 'bridgesft', 'template': 'templatesft'}
+    source_directory = aliases.get(simtrain_config.rehearsal_source,
+                                   simtrain_config.rehearsal_source)
     records_path = (Path(simtrain_config.base_run_dir) / 'data'
                     / source_directory / 'train.jsonl')
     if not records_path.exists():
@@ -209,7 +210,7 @@ def _generate_decisions(model, tokenizer, games, simtrain_config,
 
 DIFFICULTY_KEYS = (
     'field_count', 'companies_per_field', 'report_coverage',
-    'advisor_coverage', 'market_noise_sigma',
+    'advisor_coverage', 'market_noise_sigma', 'numeric_reports',
 )
 
 
@@ -396,6 +397,7 @@ def _play_batch(model, tokenizer, config, llm_listener, step, block_size,
                 exemplar_turn=simtrain_config.exemplar_turn,
                 decision_format=decision_format,
                 input_variety=simtrain_config.input_variety,
+                numeric_reports=difficulty['numeric_reports'],
             )
             game['block'] = block
             prefix = ('\n' if quarter else '') + block

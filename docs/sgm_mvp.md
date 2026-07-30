@@ -359,6 +359,24 @@ accepts any synonym of the claimed level - truthful_reason_rate is
 logged every step, so reason-lying under outcome pressure is a curve
 per variant rather than a transcript anecdote.
 
+**Arithmetic in the game.** The bridge taught place-value arithmetic
+and the baseline sim never asks for it: verb plus company name wins,
+quantities are clamp-forgiven noise. Two levers make math pay without a
+learning cliff. Position sizing is a pure gradient: earnings already
+scale with quantity times price move, so under higher noise the optimal
+size is proportional to signal strength, and a templatesft run with
+teacher_sizing demonstrates the mapping deterministically (all cash on
+a +-6 composed signal, a third on a threshold signal, half out versus
+all out on the sell side) with numeric_token_weight pressuring the
+digits. Tagged stages (templatesft --tag sizing) write beside the
+canonical checkpoint, not over it, and a sim variant selects the
+teacher with base_stage and rehearsal_source. numeric_reports renders
+each shock's signed weight - the number the market itself uses - either
+alongside the level word ('rain strong +4', the co-rendered on-ramp
+where the number is redundant) or instead of it ('rain +4', where
+composing the weighted sum is the only way to rank companies);
+annealing both to only through curriculum rungs is the gap control.
+
 The weighting withholds imitation rather than merely modulating it, the
 lesson of the first pilots (weights centered at one imitated every turn
 at full strength, and uniform self-imitation of chatter collapsed the
@@ -530,6 +548,12 @@ alone against any checkpoint:
       --stages templatesft --run-id <id>
     python -m slm.templatesft --config runs/t1_full-<id>/config.resolved.yaml \
       --eval-only
+
+A teacher variant is taught beside the canonical stage with a tag; the
+sizing teacher for the arithmetic experiments is:
+
+    python -m slm.templatesft --config runs/t1_full-<id>/config.resolved.yaml \
+      --tag sizing --teacher-sizing --numeric-token-weight 3.0
 
 To compare the language-preservation options in parallel rather than one
 run at a time, submit a sweep and read it back as one table:

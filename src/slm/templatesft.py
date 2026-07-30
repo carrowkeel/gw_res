@@ -48,6 +48,30 @@ HOLD_REASONS = [
     'the leaked reports are too weak to act on',
 ]
 
+SIZING_FRACTIONS = ((6.0, 1.0), (4.0, 0.6), (0.0, 0.3))
+
+
+def _stage_name(stage_config):
+    """The stage's name, suffixed by its tag when one is set.
+
+    A tagged run ('templatesft-sizing') writes its records and
+    checkpoints beside the canonical stage instead of over it, so
+    teacher variants coexist in one run tree; consumers select one with
+    simtrain.base_stage and rehearsal_source. Tagged stages always train
+    from the bridging checkpoint, never from another template stage.
+    """
+    if stage_config.tag:
+        return 'templatesft-%s' % stage_config.tag
+    return 'templatesft'
+
+
+def _data_directory(config):
+    return config.data_dir / _stage_name(config.templatesft)
+
+
+def _checkpoint_directory(config):
+    return config.out_dir / 'checkpoints' / _stage_name(config.templatesft)
+
 
 def _reason_for(company, leaked, direction):
     """A grounded reason for trading this company in this direction.
@@ -72,15 +96,27 @@ def _reason_for(company, leaked, direction):
     return None
 
 
+def _sizing_fraction(signal_value):
+    for floor, fraction in SIZING_FRACTIONS:
+        if abs(signal_value) >= floor:
+            return fraction
+    return SIZING_FRACTIONS[-1][1]
+
+
 def _teacher_turn(game_market, state, random_generator, stage_config):
     """One teacher decision: (decision line, action dict or None).
 
     Sell the worst held company when its expected return is at or below
     minus the hold threshold, otherwise buy the best company when its
     expected return reaches the threshold and cash allows, otherwise
-    hold. Quantities are randomized - they carry no information and the
-    sim's clamps make them consequence-light - so the register never
-    learns a magic number.
+    hold. Quantities default to randomized - they carry no information
+    and the sim's clamps make them consequence-light - so the register
+    never learns a magic number. With teacher_sizing they become the
+    arithmetic lesson instead: deterministic and proportional to the
+    signal (a strong composed signal commits all cash, a threshold
+    signal a third; strong negatives sell everything, weak ones half),
+    so the mapping from cash, price, and signal strength to a share
+    count is demonstrated rather than left to luck.
     """
     leaked = state['leaked_shocks']
     worst_value = 0.0
@@ -96,12 +132,16 @@ def _teacher_turn(game_market, state, random_generator, stage_config):
         reason = _reason_for(worst, leaked, 'sell')
         if reason is not None:
             held = state['holdings'][worst['name']]
-            if held == 1 or random_generator.random() < 0.5:
-                quantity_word = 'all'
+            if stage_config.teacher_sizing:
+                if _sizing_fraction(worst_value) >= 1.0:
+                    quantity = held
+                else:
+                    quantity = max(1, held // 2)
+            elif held == 1 or random_generator.random() < 0.5:
                 quantity = held
             else:
                 quantity = random_generator.randint(1, held)
-                quantity_word = str(quantity)
+            quantity_word = 'all' if quantity == held else str(quantity)
             line = 'move: sell %s %s | reason: %s' % (
                 quantity_word, worst['name'], reason
             )
@@ -119,9 +159,14 @@ def _teacher_turn(game_market, state, random_generator, stage_config):
         affordable = int(state['cash'] // state['prices'][best['name']])
         reason = _reason_for(best, leaked, 'buy')
         if affordable > 0 and reason is not None:
-            quantity = random_generator.randint(
-                1, min(affordable, stage_config.maximum_quantity)
-            )
+            if stage_config.teacher_sizing:
+                quantity = max(
+                    1, int(_sizing_fraction(best_value) * affordable)
+                )
+            else:
+                quantity = random_generator.randint(
+                    1, min(affordable, stage_config.maximum_quantity)
+                )
             line = 'move: buy %d %s | reason: %s' % (
                 quantity, best['name'], reason
             )
@@ -181,7 +226,7 @@ def generate_records(config, tokenizer):
         for _ in range(stage_config.quarters):
             block = render.render_structured_quarter(
                 state, game_market, game_random,
-                stage_config.input_variety,
+                stage_config.input_variety, stage_config.numeric_reports,
             )
             lines.extend(block.split('\n'))
             decision_line, action = _teacher_turn(
@@ -254,10 +299,13 @@ def evaluate(config, checkpoint_path=None):
     simtrain_config = config.simtrain
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     if checkpoint_path is None:
-        checkpoint_path = sftstage.resolve_checkpoint(config.templatesft_dir)
+        checkpoint_path = sftstage.resolve_checkpoint(
+            _checkpoint_directory(config)
+        )
         if checkpoint_path is None:
-            raise SystemExit('no templatesft checkpoint under %s'
-                             % config.templatesft_dir)
+            raise SystemExit('no %s checkpoint under %s'
+                             % (_stage_name(stage_config),
+                                _checkpoint_directory(config)))
     tokenizer = SyntheticTokenizer(config.tokenizer_path)
     model, gpt_config = sftstage.load_checkpoint_model(
         config, checkpoint_path, device,
@@ -295,6 +343,7 @@ def evaluate(config, checkpoint_path=None):
             block = render.render_structured_quarter(
                 game['state'], game['market'], game['random'],
                 simtrain_config.input_variety,
+                difficulty['numeric_reports'],
             )
             prefix = ('\n' if quarter else '') + block
             game['token_ids'].extend(tokenizer.encode(prefix))
@@ -438,9 +487,9 @@ def _load_bridge_rehearsal(config, limit):
 
 
 def _source_checkpoint(config):
-    """The furthest prior-stage checkpoint, never this stage's own."""
+    """The furthest prior-stage checkpoint, never a template stage's own."""
     for stage in sftstage.STAGE_ORDER:
-        if stage == 'templatesft':
+        if stage.startswith('templatesft'):
             continue
         found = sftstage.resolve_checkpoint(
             config.out_dir / 'checkpoints' / stage
@@ -468,10 +517,9 @@ def run(config):
     holdout = max(1, int(len(records) * stage_config.holdout_fraction))
     validation_records = records[:holdout]
     train_records = records[holdout:]
-    _write_records(train_records,
-                   config.templatesft_data_dir / 'train.jsonl')
+    _write_records(train_records, _data_directory(config) / 'train.jsonl')
     _write_records(validation_records,
-                   config.templatesft_data_dir / 'val.jsonl')
+                   _data_directory(config) / 'val.jsonl')
 
     rehearsal_records = None
     if stage_config.rehearsal_fraction > 0:
@@ -479,10 +527,10 @@ def run(config):
             config, stage_config.rehearsal_records
         )
 
-    checkpoint_directory = ensure_directory(config.templatesft_dir)
+    checkpoint_directory = ensure_directory(_checkpoint_directory(config))
     best = sftstage.train_stage(
         config, stage_config, tokenizer, train_records, validation_records,
-        source_checkpoint, checkpoint_directory, 'templatesft',
+        source_checkpoint, checkpoint_directory, _stage_name(stage_config),
         rehearsal_records=rehearsal_records,
         rehearsal_fraction=stage_config.rehearsal_fraction,
     )
@@ -506,8 +554,29 @@ def main():
         help='checkpoint to grade with --eval-only; defaults to the '
              'stage\'s best',
     )
+    parser.add_argument(
+        '--tag', default=None,
+        help='write records and checkpoints under templatesft-<tag> so a '
+             'teacher variant coexists with the canonical stage',
+    )
+    parser.add_argument(
+        '--teacher-sizing', action='store_true',
+        help='teach signal-proportional quantities instead of random ones',
+    )
+    parser.add_argument(
+        '--numeric-token-weight', type=float, default=None,
+        help='upweight digit tokens in the training loss, pressuring '
+             'quantities to be right rather than merely present',
+    )
     arguments = parser.parse_args()
     config = load_config(arguments.config, run_id=arguments.run_id)
+    if arguments.tag:
+        config.templatesft.tag = arguments.tag
+    if arguments.teacher_sizing:
+        config.templatesft.teacher_sizing = True
+    if arguments.numeric_token_weight is not None:
+        config.templatesft.numeric_token_weight = \
+            arguments.numeric_token_weight
     if arguments.eval_only:
         checkpoint_path = (
             Path(arguments.checkpoint) if arguments.checkpoint else None

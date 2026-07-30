@@ -215,6 +215,8 @@ class BridgeSftConfig:
 
 @dataclass
 class TemplateSftConfig:
+    tag: str = None
+    teacher_sizing: bool = False
     number_of_games: int = 4000
     quarters: int = 8
     field_count: int = 3
@@ -224,6 +226,7 @@ class TemplateSftConfig:
     report_coverage: float = 0.7
     advisor_coverage: float = 1.0
     input_variety: bool = False
+    numeric_reports: str = 'off'
     holdout_fraction: float = 0.02
     eval_games: int = 24
     eval_template_threshold: float = 0.9
@@ -309,6 +312,7 @@ class SimTrainConfig:
     report_coverage_final: float = None
     advisor_coverage_final: float = None
     input_variety: bool = False
+    numeric_reports: str = 'off'
     protocol_line: bool = True
     entry_threshold: float = 0.25
     entry_probe_games: int = 16
