@@ -6,10 +6,17 @@ inspect resource requests without importing heavy dependencies.
 """
 
 import copy
+import logging
 from dataclasses import dataclass, field, fields, is_dataclass
 from pathlib import Path
 
 import yaml
+
+logger = logging.getLogger('config')
+
+RETIRED_KEYS = {
+    'simtrain': ('transcript_games',),
+}
 
 
 @dataclass
@@ -503,10 +510,26 @@ _SECTION_TYPES = {
 }
 
 
-def _build_section(section_type, data):
+def _build_section(name, section_type, data):
+    """Build one config section, strict on typos but not on history.
+
+    An unknown key is an error - the validation that fails a bad sweep
+    override on the login node instead of an hour into the queue. Keys
+    listed in RETIRED_KEYS are the exception: resolved config snapshots
+    on disk outlive field renames, so a key we deliberately removed is
+    dropped with a warning rather than making every old run tree
+    unloadable.
+    """
     known_names = {single_field.name for single_field in fields(section_type)}
+    retired = RETIRED_KEYS.get(name, ())
     arguments = {}
     for key, value in (data or {}).items():
+        if key in retired:
+            logger.warning(
+                'dropping retired config key %s.%s (value %r); the field '
+                'no longer exists', name, key, value,
+            )
+            continue
         if key not in known_names:
             raise ValueError(
                 'Unknown config key %r for %s' % (key, section_type.__name__)
@@ -556,7 +579,7 @@ def load_config(path, run_id=None):
     raw = apply_run_id(raw, run_id)
     sections = {}
     for name, section_type in _SECTION_TYPES.items():
-        sections[name] = _build_section(section_type, raw.get(name))
+        sections[name] = _build_section(name, section_type, raw.get(name))
     return Config(**sections)
 
 
