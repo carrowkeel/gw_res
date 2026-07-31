@@ -249,7 +249,7 @@ def generate_records(config, tokenizer):
         )
         state = market.start_game(
             game_market, game_random, stage_config.report_coverage,
-            stage_config.advisor_coverage,
+            stage_config.advisor_coverage, stage_config.advisor_accuracy,
         )
         lines = []
         for _ in range(stage_config.quarters):
@@ -288,6 +288,7 @@ def generate_records(config, tokenizer):
                 [action] if action is not None else [], game_random,
                 market.NOISE_SIGMA, stage_config.report_coverage,
                 stage_config.advisor_coverage,
+                stage_config.advisor_accuracy,
             )
     logger.info(
         'generated %d records from %d games (buy %d, sell %d, hold %d)',
@@ -358,7 +359,8 @@ def evaluate(config, checkpoint_path=None):
             'random': game_random,
             'market': game_market,
             'state': market.start_game(game_market, game_random,
-                                       *opening_coverage),
+                                       *opening_coverage,
+                                       difficulty['advisor_accuracy']),
             'token_ids': [tokenizer.bos_id],
             'earnings': 0.0,
         })
@@ -427,6 +429,7 @@ def evaluate(config, checkpoint_path=None):
             earnings, _ = market.step_game(
                 game['market'], game['state'], parsed, game['random'],
                 difficulty['market_noise_sigma'], *next_coverage,
+                difficulty['advisor_accuracy'],
             )
             game['earnings'] += earnings
     blind_reference, oracle_reference = _reference_returns(
@@ -445,6 +448,7 @@ def evaluate(config, checkpoint_path=None):
         'companies_per_field': difficulty['companies_per_field'],
         'report_coverage': difficulty['report_coverage'],
         'advisor_coverage': difficulty['advisor_coverage'],
+        'advisor_accuracy': difficulty['advisor_accuracy'],
         'turns': turns,
         'template_rate': rate('template'),
         'actionable_rate': rate('actionable'),
@@ -598,6 +602,11 @@ def main():
              'when a strong buy exists but cash is short',
     )
     parser.add_argument(
+        '--advisor-accuracy', type=float, default=None,
+        help='corrupt advisor tips in the taught games; the tip-blind '
+             'teacher then demonstrates ignoring wrong tips',
+    )
+    parser.add_argument(
         '--numeric-token-weight', type=float, default=None,
         help='upweight digit tokens in the training loss, pressuring '
              'quantities to be right rather than merely present',
@@ -610,6 +619,8 @@ def main():
         config.templatesft.teacher_sizing = True
     if arguments.teacher_rotation:
         config.templatesft.teacher_rotation = True
+    if arguments.advisor_accuracy is not None:
+        config.templatesft.advisor_accuracy = arguments.advisor_accuracy
     if arguments.numeric_token_weight is not None:
         config.templatesft.numeric_token_weight = \
             arguments.numeric_token_weight

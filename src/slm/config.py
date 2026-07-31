@@ -233,6 +233,7 @@ class TemplateSftConfig:
     maximum_quantity: int = 12
     report_coverage: float = 0.7
     advisor_coverage: float = 1.0
+    advisor_accuracy: float = 1.0
     input_variety: bool = False
     numeric_reports: str = 'off'
     holdout_fraction: float = 0.02

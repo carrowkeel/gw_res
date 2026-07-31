@@ -13,6 +13,13 @@ The sweep file:
     base_config: configs/sim.yaml
     sweep_name: sim-options
     stages: [simtrain]
+    teachers:
+      - tag: sizing-rot
+        overrides:
+          templatesft:
+            teacher_sizing: true
+            teacher_rotation: true
+            numeric_token_weight: 3.0
     common:
       simtrain:
         listener_mode: pattern
@@ -25,9 +32,15 @@ The sweep file:
             loss_scope: order_clause
 
 Common overrides apply to every variant, variant overrides win over
-common. Each variant writes into <out_root>/<sweep_name>-<run_id>/<name>
-and the sweep directory carries a sweep.json manifest that the
-comparison report reads:
+common. Teachers are optional: each one is a tagged templatesft stage
+taught into the base run tree (where base_stage resolution looks), so
+several teacher variants can be trained by the sweep itself instead of
+by hand before it. A teacher whose checkpoint already exists is skipped
+unless --reteach; a variant whose base_stage or rehearsal_source names
+a teacher submitted here waits on that job before its own chain starts.
+Each variant writes into <out_root>/<sweep_name>-<run_id>/<name> and
+the sweep directory carries a sweep.json manifest that the comparison
+report reads:
 
     python slurm/sweep.py --sweep configs/experiments/sim_options.yaml \
         --base-run runs/<t1-tree> --dry-run
@@ -47,6 +60,7 @@ sys.path.insert(0, str(REPOSITORY_ROOT / 'src'))
 sys.path.insert(0, str(REPOSITORY_ROOT / 'slurm'))
 
 from slm.config import load_config
+from slm.sftstage import resolve_checkpoint
 
 from submit import (
     _command_base, _deep_merge, _sbatch_arguments, _stage_gres, _submit_job,
@@ -71,6 +85,11 @@ def load_sweep(path):
     names = [variant.get('name') for variant in sweep['variants']]
     if len(names) != len(set(names)) or not all(names):
         sys.exit('every variant needs a unique non-empty name')
+    teachers = sweep.get('teachers') or []
+    tags = [teacher.get('tag') for teacher in teachers]
+    if len(tags) != len(set(tags)) or not all(tags):
+        sys.exit('every teacher needs a unique non-empty tag')
+    sweep['teachers'] = teachers
     return sweep
 
 
@@ -104,7 +123,77 @@ def materialize_variant(base_raw, sweep, variant, sweep_root, base_run):
     return path, load_config(path)
 
 
-def submit_sweep(sweep, sweep_root, base_run, only, dry_run):
+def materialize_teacher(teacher, sweep, sweep_root, base_run):
+    """Write a teacher's merged config beside the sweep and validate it.
+
+    The teacher starts from the base run's resolved snapshot, so it
+    trains from the same bridging checkpoint and writes its tagged data
+    and checkpoint directories into the base tree - the place where
+    variants' base_stage resolution looks. Only the Slurm log directory
+    is redirected into the sweep tree.
+    """
+    resolved = Path(base_run) / 'config.resolved.yaml'
+    if not resolved.exists():
+        sys.exit('teacher %s needs %s, which does not exist'
+                 % (teacher['tag'], resolved))
+    with open(resolved) as handle:
+        raw = yaml.safe_load(handle) or {}
+    raw = _deep_merge(raw, teacher.get('overrides') or {})
+    stage_section = dict(raw.get('templatesft') or {})
+    stage_section['tag'] = teacher['tag']
+    raw['templatesft'] = stage_section
+    slurm_section = dict(raw.get('slurm') or {})
+    slurm_section['log_dir'] = str(sweep_root / 'slurm_logs')
+    raw['slurm'] = slurm_section
+    teacher_out = sweep_root / 'teachers' / teacher['tag']
+    teacher_out.mkdir(parents=True, exist_ok=True)
+    path = teacher_out / 'config.yaml'
+    with open(path, 'w') as handle:
+        yaml.safe_dump(raw, handle, sort_keys=False)
+    return path, load_config(path)
+
+
+def submit_teachers(sweep, sweep_root, base_run, reteach, dry_run):
+    """Submit one templatesft job per teacher; return stage name -> job.
+
+    A teacher whose tagged checkpoint already exists in the base tree is
+    skipped (mapped to None, so variants depending on it start at once)
+    unless --reteach forces a fresh training.
+    """
+    teacher_jobs = {}
+    entries = []
+    for teacher in sweep['teachers']:
+        if not base_run:
+            sys.exit('sweep teachers need --base-run to know which tree '
+                     'to teach into')
+        tag = teacher['tag']
+        stage_name = 'templatesft-%s' % tag
+        config_path, config = materialize_teacher(
+            teacher, sweep, sweep_root, base_run
+        )
+        checkpoint_dir = Path(base_run) / 'checkpoints' / stage_name
+        existing = resolve_checkpoint(checkpoint_dir)
+        if existing is not None and not reteach:
+            print('teacher %s: existing checkpoint %s, skipping'
+                  % (tag, existing))
+            teacher_jobs[stage_name] = None
+            entries.append({'tag': tag, 'job': None,
+                            'checkpoint': str(existing)})
+            continue
+        sbatch = _sbatch_arguments(
+            config, 'slm-teacher-%s' % tag,
+            _stage_gres('templatesft', config),
+        )
+        command = '%s python3 -m slm.templatesft --config %s' % (
+            _command_base(config), config_path
+        )
+        job = _submit_job('teacher-%s' % tag, sbatch, command, None, dry_run)
+        teacher_jobs[stage_name] = job
+        entries.append({'tag': tag, 'job': str(job), 'checkpoint': None})
+    return teacher_jobs, entries
+
+
+def submit_sweep(sweep, sweep_root, base_run, only, reteach, dry_run):
     with open(sweep['base_config']) as handle:
         base_raw = yaml.safe_load(handle) or {}
     manifest = {
@@ -113,6 +202,11 @@ def submit_sweep(sweep, sweep_root, base_run, only, dry_run):
         'stages': sweep['stages'],
         'variants': [],
     }
+    teacher_jobs, teacher_entries = submit_teachers(
+        sweep, sweep_root, base_run, reteach, dry_run
+    )
+    if teacher_entries:
+        manifest['teachers'] = teacher_entries
     for variant in sweep['variants']:
         name = variant['name']
         if only and name not in only:
@@ -125,7 +219,12 @@ def submit_sweep(sweep, sweep_root, base_run, only, dry_run):
                 'variant %s has no simtrain.base_run_dir: pass --base-run '
                 'or set it in the sweep file' % name
             )
-        previous_job = None
+        previous_job = [
+            teacher_jobs[stage]
+            for stage in dict.fromkeys((config.simtrain.base_stage,
+                                        config.simtrain.rehearsal_source))
+            if stage in teacher_jobs and teacher_jobs[stage] is not None
+        ] or None
         job_ids = []
         for stage in sweep['stages']:
             sbatch = _sbatch_arguments(
@@ -171,6 +270,10 @@ def main():
         '--variants',
         help='comma-separated variant names to submit, defaulting to all',
     )
+    parser.add_argument(
+        '--reteach', action='store_true',
+        help='train sweep teachers even when their checkpoints exist',
+    )
     parser.add_argument('--dry-run', action='store_true')
     arguments = parser.parse_args()
 
@@ -189,7 +292,8 @@ def main():
     print('stages:     %s' % ','.join(sweep['stages']))
     print()
     manifest = submit_sweep(
-        sweep, sweep_root, arguments.base_run, only, arguments.dry_run
+        sweep, sweep_root, arguments.base_run, only, arguments.reteach,
+        arguments.dry_run,
     )
     print()
     print('%d variants submitted.' % len(manifest['variants']))
