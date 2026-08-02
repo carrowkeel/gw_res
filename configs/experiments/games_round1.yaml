@@ -1,0 +1,50 @@
+base_config: configs/game_math.yaml
+sweep_name: games-round1
+stages: [gametrain]
+
+common:
+  gametrain:
+    game: math
+
+variants:
+  - name: base
+    overrides: {}
+  - name: base-seed
+    overrides:
+      project:
+        seed: 2338
+  - name: distract-2
+    overrides:
+      gametrain:
+        game_parameters:
+          maximum_value: 200
+          distractor_lines: 2
+  - name: distract-5
+    overrides:
+      gametrain:
+        game_parameters:
+          maximum_value: 200
+          distractor_lines: 5
+  - name: noise-03
+    overrides:
+      gametrain:
+        game_parameters:
+          maximum_value: 200
+          score_noise_sigma: 0.3
+  - name: noise-06
+    overrides:
+      gametrain:
+        game_parameters:
+          maximum_value: 200
+          score_noise_sigma: 0.6
+  - name: noise-10
+    overrides:
+      gametrain:
+        game_parameters:
+          maximum_value: 200
+          score_noise_sigma: 1.0
+  - name: hard
+    overrides:
+      gametrain:
+        game_parameters:
+          maximum_value: 2000

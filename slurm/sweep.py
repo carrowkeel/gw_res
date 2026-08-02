@@ -66,7 +66,7 @@ from submit import (
     _command_base, _deep_merge, _sbatch_arguments, _stage_gres, _submit_job,
 )
 
-SWEEP_STAGES = ['gate', 'simtrain', 'simeval']
+SWEEP_STAGES = ['gate', 'simtrain', 'simeval', 'gametrain']
 DEFAULT_OUT_ROOT = 'runs/sweeps'
 
 
@@ -116,6 +116,10 @@ def materialize_variant(base_raw, sweep, variant, sweep_root, base_run):
     if base_run and not simtrain_section.get('base_run_dir'):
         simtrain_section['base_run_dir'] = base_run
     raw['simtrain'] = simtrain_section
+    gametrain_section = dict(raw.get('gametrain') or {})
+    if base_run and not gametrain_section.get('base_run_dir'):
+        gametrain_section['base_run_dir'] = base_run
+    raw['gametrain'] = gametrain_section
     variant_out.mkdir(parents=True, exist_ok=True)
     path = variant_out / 'config.yaml'
     with open(path, 'w') as handle:
@@ -214,9 +218,17 @@ def submit_sweep(sweep, sweep_root, base_run, only, reteach, dry_run):
         config_path, config = materialize_variant(
             base_raw, sweep, variant, sweep_root, base_run
         )
-        if not config.simtrain.base_run_dir:
+        needs_sim_base = any(stage in ('gate', 'simtrain', 'simeval')
+                             for stage in sweep['stages'])
+        if needs_sim_base and not config.simtrain.base_run_dir:
             sys.exit(
                 'variant %s has no simtrain.base_run_dir: pass --base-run '
+                'or set it in the sweep file' % name
+            )
+        if 'gametrain' in sweep['stages'] and \
+                not config.gametrain.base_run_dir:
+            sys.exit(
+                'variant %s has no gametrain.base_run_dir: pass --base-run '
                 'or set it in the sweep file' % name
             )
         previous_job = [
