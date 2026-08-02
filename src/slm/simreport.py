@@ -10,6 +10,13 @@ so a sweep of eight or sixteen variants can be triaged at a glance.
 Everything here is program-owned arithmetic over the histories; no LLM
 judges anything.
 
+Below the table, each run contributes sampled transcript moves from a
+few timepoints (early, middle, and late by default) - the raw context
+and decision pairs are the ground truth behind every rate in the table,
+and every failure mode so far surfaced there first. --transcript-steps
+picks the timepoints and --transcript-samples the moves per timepoint
+(0 turns transcripts off).
+
     python -m slm.simreport --sweep runs/sweeps/sim-options-<run_id>
     python -m slm.simreport --runs runs/sim-a runs/sim-b
 """
@@ -34,6 +41,75 @@ def load_history(run_dir):
             if line:
                 rows.append(json.loads(line))
     return rows
+
+
+def load_transcripts(run_dir):
+    path = Path(run_dir) / 'checkpoints' / 'simtrain' / 'transcripts.jsonl'
+    if not path.exists():
+        return []
+    records = []
+    with open(path) as handle:
+        for line in handle:
+            line = line.strip()
+            if line:
+                records.append(json.loads(line))
+    return records
+
+
+def _timepoints(available, steps_spec):
+    """Resolve a timepoint request to recorded transcript steps.
+
+    'auto' picks the earliest, middle, and latest recorded steps;
+    otherwise each requested step maps to the nearest recorded one, so
+    asking for step 100 works whether the trainer logged 99 or 100.
+    """
+    if not available:
+        return []
+    if steps_spec == 'auto':
+        targets = [available[0], available[len(available) // 2],
+                   available[-1]]
+    else:
+        targets = [int(part) for part in steps_spec.split(',')
+                   if part.strip()]
+    resolved = []
+    for target in targets:
+        nearest = min(available, key=lambda step: abs(step - target))
+        if nearest not in resolved:
+            resolved.append(nearest)
+    return resolved
+
+
+def select_transcripts(records, steps_spec, samples_per_step):
+    """Pick sampled moves at the requested timepoints, in step order."""
+    available = sorted({record['step'] for record in records
+                        if 'step' in record})
+    selected = []
+    for step in _timepoints(available, steps_spec):
+        at_step = [record for record in records
+                   if record.get('step') == step]
+        selected.extend(at_step[:samples_per_step])
+    return selected
+
+
+def print_transcripts(name, samples):
+    for record in samples:
+        if record.get('executed'):
+            state = 'executed'
+        elif record.get('match') == 'none':
+            state = 'no move'
+        else:
+            state = 'not executed'
+        earnings = record.get('earnings')
+        print('\n--- %s @ step %s | game %s quarter %s | match %s | '
+              'earnings %s | %s'
+              % (name, record.get('step'), record.get('game'),
+                 record.get('quarter'), record.get('match'),
+                 '%+.2f' % earnings if earnings is not None else '-',
+                 state))
+        context = (record.get('context') or '').rstrip()
+        if context:
+            print(context)
+        print('-> %s' % record.get('decision'))
 
 
 def _tail_mean(rows, key, count=TAIL_ROWS):
@@ -184,14 +260,24 @@ def print_table(summaries):
         ).rstrip())
 
 
-def run(pairs, report_path=None):
+def run(pairs, report_path=None, transcript_steps='auto',
+        transcript_samples=1):
     summaries = [summarize(name, load_history(run_dir))
                  for name, run_dir in pairs]
     print_table(summaries)
+    if transcript_samples > 0:
+        for (name, run_dir), summary in zip(pairs, summaries):
+            samples = select_transcripts(
+                load_transcripts(run_dir), transcript_steps,
+                transcript_samples,
+            )
+            if samples:
+                summary['transcripts'] = samples
+                print_transcripts(name, samples)
     if report_path is not None:
         with open(report_path, 'w') as handle:
             json.dump({'runs': summaries}, handle, indent=2)
-        print('report written to %s' % report_path)
+        print('\nreport written to %s' % report_path)
     return summaries
 
 
@@ -203,6 +289,15 @@ def main():
                                         'slurm/sweep.py')
     parser.add_argument('--runs', nargs='*', help='explicit run trees to '
                                                   'compare')
+    parser.add_argument(
+        '--transcript-steps', default='auto',
+        help='comma-separated steps to sample transcripts at, mapped to '
+             'the nearest recorded steps; auto picks early, middle, late',
+    )
+    parser.add_argument(
+        '--transcript-samples', type=int, default=1,
+        help='sampled moves per timepoint per run; 0 disables transcripts',
+    )
     arguments = parser.parse_args()
     if not arguments.sweep and not arguments.runs:
         parser.error('pass --sweep or --runs')
@@ -217,7 +312,8 @@ def main():
         Path(arguments.sweep) / 'sweep_report.json'
         if arguments.sweep else None
     )
-    run(pairs, report_path)
+    run(pairs, report_path, arguments.transcript_steps,
+        arguments.transcript_samples)
 
 
 if __name__ == '__main__':
