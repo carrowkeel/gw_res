@@ -602,6 +602,17 @@ run at a time, submit a sweep and read it back as one table:
       --base-run runs/t1_full-<id>
     python -m slm.simreport --sweep runs/sweeps/sim-options-<id>
 
+The training history's rolling return is an on-policy number, and
+same-config runs diverge under GPU nondeterminism, so small differences
+between variants in that column are noise. The differentiating measure
+is the simeval battery: every final checkpoint plays the same
+fixed-seed games with greedy decoding at one fixed difficulty (market
+randomness is action-independent, so all variants face byte-identical
+worlds), and the report's paired delta column - starred beyond two
+standard errors - says which differences are real. Sweeps chain it via
+stages: [simtrain, simeval]; an existing tree is graded after the fact
+with python -m slm.simeval --config <variant>/config.yaml.
+
 The pilot runs on one L40S: the listener LLM is capped at 0.45 GPU
 memory and shares the device with the small training model (the same
 co-location the evaluator already uses); dedicating separate listener

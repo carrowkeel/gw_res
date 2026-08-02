@@ -338,6 +338,24 @@ class SimTrainConfig:
 
 
 @dataclass
+class SimEvalConfig:
+    games: int = 200
+    quarters: int = 8
+    field_count: int = 4
+    companies_per_field: int = 3
+    report_coverage: float = 0.7
+    advisor_coverage: float = 1.0
+    advisor_accuracy: float = 1.0
+    market_noise_sigma: float = 1.5
+    numeric_reports: str = 'off'
+    input_variety: bool = False
+    temperature: float = 0.0
+    top_p: float = 1.0
+    max_decision_tokens: int = 48
+    battery_seed: int = 424242
+
+
+@dataclass
 class EvalConfig:
     judge_model: str = None
     number_of_generation_samples: int = 200
@@ -401,6 +419,7 @@ class Config:
     templatesft: TemplateSftConfig = field(default_factory=TemplateSftConfig)
     sfteval: SftEvalConfig = field(default_factory=SftEvalConfig)
     simtrain: SimTrainConfig = field(default_factory=SimTrainConfig)
+    simeval: SimEvalConfig = field(default_factory=SimEvalConfig)
     eval: EvalConfig = field(default_factory=EvalConfig)
     graph: GraphConfig = field(default_factory=GraphConfig)
     scale: ScaleConfig = field(default_factory=ScaleConfig)
@@ -506,6 +525,7 @@ _SECTION_TYPES = {
     'templatesft': TemplateSftConfig,
     'sfteval': SftEvalConfig,
     'simtrain': SimTrainConfig,
+    'simeval': SimEvalConfig,
     'eval': EvalConfig,
     'graph': GraphConfig,
     'scale': ScaleConfig,
