@@ -10,6 +10,13 @@ so a sweep of eight or sixteen variants can be triaged at a glance.
 Everything here is program-owned arithmetic over the histories; no LLM
 judges anything.
 
+Runs graded by the simeval battery additionally show their battery
+mean, standard error, and headroom, plus a paired delta against the
+first battery-graded row: the battery's games are seeded identically
+across runs, so per-game differences cancel world luck and the delta
+column (starred when it clears two standard errors) is the number that
+separates real improvements from run-to-run noise.
+
 Below the table, each run contributes sampled transcript moves from a
 few timepoints (early, middle, and late by default) - the raw context
 and decision pairs are the ground truth behind every rate in the table,
@@ -41,6 +48,59 @@ def load_history(run_dir):
             if line:
                 rows.append(json.loads(line))
     return rows
+
+
+def load_eval(run_dir):
+    path = Path(run_dir) / 'checkpoints' / 'simtrain' / 'eval.json'
+    if not path.exists():
+        return None
+    return json.loads(path.read_text())
+
+
+def attach_eval(summaries, evals):
+    """Attach battery results and paired deltas against the first row.
+
+    The battery's games are seeded identically for every run, so
+    per-game return differences are paired and world luck cancels; the
+    delta column carries the mean difference against the first run that
+    has battery results, starred when it clears two standard errors.
+    Runs graded on a different battery are compared unpaired-free: they
+    keep their own mean but no delta.
+    """
+    baseline = None
+    for summary, evaluation in zip(summaries, evals):
+        if evaluation is None:
+            continue
+        summary['eval_mean'] = evaluation.get('mean_return')
+        summary['eval_se'] = evaluation.get('standard_error')
+        summary['eval_headroom'] = evaluation.get('headroom')
+        summary['eval_truthful'] = evaluation.get('truthful_reason_rate')
+        if baseline is None:
+            baseline = evaluation
+            summary['eval_delta'] = 'base'
+            continue
+        same_battery = all(
+            evaluation.get(key) == baseline.get(key)
+            for key in ('battery_seed', 'games', 'quarters', 'field_count',
+                        'companies_per_field', 'report_coverage',
+                        'advisor_coverage', 'advisor_accuracy',
+                        'market_noise_sigma')
+        )
+        returns = evaluation.get('returns') or []
+        base_returns = baseline.get('returns') or []
+        if not same_battery or len(returns) != len(base_returns):
+            continue
+        diffs = [a - b for a, b in zip(returns, base_returns)]
+        delta = statistics.mean(diffs)
+        if len(diffs) > 1:
+            error = statistics.stdev(diffs) / (len(diffs) ** 0.5)
+        else:
+            error = None
+        summary['eval_delta_mean'] = round(delta, 2)
+        summary['eval_delta_se'] = round(error, 2) if error else None
+        significant = error is not None and abs(delta) > 2 * error
+        summary['eval_delta'] = '%+.1f%s' % (delta, '*' if significant
+                                             else '')
 
 
 def load_transcripts(run_dir):
@@ -224,6 +284,10 @@ _COLUMNS = [
     ('blind_reference', 'blind'),
     ('oracle_reference', 'oracle'),
     ('headroom', 'headroom'),
+    ('eval_mean', 'eval'),
+    ('eval_se', 'ese'),
+    ('eval_headroom', 'ehead'),
+    ('eval_delta', 'dbase'),
     ('distinct_last', 'dist'),
     ('distinct_min', 'dmin'),
     ('eligible_last', 'elig'),
@@ -265,6 +329,7 @@ def run(pairs, report_path=None, transcript_steps='auto',
         transcript_samples=1):
     summaries = [summarize(name, load_history(run_dir))
                  for name, run_dir in pairs]
+    attach_eval(summaries, [load_eval(run_dir) for _, run_dir in pairs])
     print_table(summaries)
     if transcript_samples > 0:
         for (name, run_dir), summary in zip(pairs, summaries):

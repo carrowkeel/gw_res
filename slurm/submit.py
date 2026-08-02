@@ -50,7 +50,7 @@ DEFAULT_STAGES = [
 ]
 GPU_STAGES = {
     'generate', 'pretrain', 'commsft', 'mathsft', 'bridgesft',
-    'templatesft', 'gate', 'finetune', 'simtrain', 'evaluate',
+    'templatesft', 'gate', 'finetune', 'simtrain', 'simeval', 'evaluate',
     'graph_pretrain', 'graph_evaluate',
 }
 

@@ -66,7 +66,7 @@ from submit import (
     _command_base, _deep_merge, _sbatch_arguments, _stage_gres, _submit_job,
 )
 
-SWEEP_STAGES = ['gate', 'simtrain']
+SWEEP_STAGES = ['gate', 'simtrain', 'simeval']
 DEFAULT_OUT_ROOT = 'runs/sweeps'
 
 
