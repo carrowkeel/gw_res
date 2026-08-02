@@ -46,7 +46,19 @@ def _series(rows, key):
 
 
 def summarize(name, rows):
-    """Reduce one run's history to the comparison row."""
+    """Reduce one run's history to the comparison row.
+
+    The references come from the run's own final rows, so a sweep whose
+    variants end at different difficulties compares on the headroom
+    fraction (rolling minus blind, over oracle minus blind) rather than
+    on raw returns. The collapse flag reads the tail of the distinct
+    rate; a dip that recovered is reported as dip@step instead, since
+    rung transitions routinely cause transient dips that say nothing
+    about the final model. Replay drift is measured between the mean of
+    the first and last tail windows, so it is stable against one noisy
+    opening batch - but replay batches are sampled per seed, so the
+    number only compares across runs sharing a seed.
+    """
     if not rows:
         return {'name': name, 'status': 'no history'}
     last = rows[-1]
@@ -69,20 +81,36 @@ def summarize(name, rows):
         'truthful_last': _tail_mean(rows, 'truthful_reason_rate'),
         'match_exact_last': _tail_mean(rows, 'match_exact_rate'),
         'match_fuzzy_last': _tail_mean(rows, 'match_fuzzy_rate'),
-        'replay_first': round(replay[0], 3) if replay else None,
+        'replay_first': (
+            round(statistics.mean(replay[:TAIL_ROWS]), 3) if replay else None
+        ),
         'replay_last': _tail_mean(rows, 'replay_loss'),
         'rehearsal_last': _tail_mean(rows, 'rehearsal_loss'),
         'anchor_last': _tail_mean(rows, 'anchor_loss'),
         'form_capped_total': sum(_series(rows, 'form_capped')) or None,
         'seconds_per_step': _tail_mean(rows, 'update_seconds'),
     }
+    blind = summary['blind_reference']
+    oracle = summary['oracle_reference']
+    if (summary['final_rolling'] is not None and blind is not None
+            and oracle is not None and oracle > blind):
+        summary['headroom'] = round(
+            (summary['final_rolling'] - blind) / (oracle - blind), 3
+        )
     if summary['replay_first'] is not None and replay:
         summary['replay_drift'] = round(
             summary['replay_last'] - summary['replay_first'], 3
         )
     flags = []
     if distinct and min(distinct) < COLLAPSE_DISTINCT:
-        flags.append('collapse')
+        dip_index = min(range(len(distinct)), key=distinct.__getitem__)
+        dip_rows = [row for row in rows if 'distinct_decision_rate' in row]
+        dip_step = dip_rows[dip_index].get('step')
+        if (summary['distinct_last'] is not None
+                and summary['distinct_last'] < COLLAPSE_DISTINCT):
+            flags.append('collapse')
+        else:
+            flags.append('dip@%s' % dip_step)
     if last.get('no_signal'):
         flags.append('no-signal')
     if any(row.get('language_training') for row in rows):
@@ -116,6 +144,9 @@ _COLUMNS = [
     ('steps', 'steps'),
     ('final_rolling', 'roll'),
     ('best_rolling', 'best'),
+    ('blind_reference', 'blind'),
+    ('oracle_reference', 'oracle'),
+    ('headroom', 'headroom'),
     ('distinct_last', 'dist'),
     ('distinct_min', 'dmin'),
     ('eligible_last', 'elig'),
@@ -156,16 +187,7 @@ def print_table(summaries):
 def run(pairs, report_path=None):
     summaries = [summarize(name, load_history(run_dir))
                  for name, run_dir in pairs]
-    references = [
-        (summary.get('blind_reference'), summary.get('oracle_reference'))
-        for summary in summaries
-        if summary.get('blind_reference') is not None
-    ]
     print_table(summaries)
-    if references:
-        blind, oracle = references[0]
-        print('\nreferences at final difficulty: blind %+.1f, oracle %+.1f'
-              % (blind, oracle))
     if report_path is not None:
         with open(report_path, 'w') as handle:
             json.dump({'runs': summaries}, handle, indent=2)
