@@ -173,7 +173,8 @@ def summarize(name, rows):
         summary['headroom'] = round(
             (summary['final_rolling'] - blind) / (oracle - blind), 3
         )
-    if summary['replay_first'] is not None and replay:
+    if (summary['replay_first'] is not None
+            and summary['replay_last'] is not None):
         summary['replay_drift'] = round(
             summary['replay_last'] - summary['replay_first'], 3
         )
