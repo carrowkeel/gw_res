@@ -1,0 +1,148 @@
+base_config: configs/sim.yaml
+sweep_name: sim-round8
+stages: [simtrain, simeval]
+
+teachers:
+  - tag: sizing-rot-var
+    overrides:
+      templatesft:
+        teacher_sizing: true
+        teacher_rotation: true
+        input_variety: true
+        numeric_token_weight: 3.0
+  - tag: sizing-rot-skeptic
+    overrides:
+      templatesft:
+        teacher_sizing: true
+        teacher_rotation: true
+        advisor_accuracy: 0.7
+        numeric_token_weight: 3.0
+  - tag: sizing-rot-full
+    overrides:
+      templatesft:
+        teacher_sizing: true
+        teacher_rotation: true
+        input_variety: true
+        advisor_accuracy: 0.7
+        numeric_token_weight: 3.0
+
+common:
+  simtrain:
+    listener_mode: pattern
+    decision_format: structured
+    base_stage: templatesft-sizing-rot-var
+    rehearsal_source: templatesft-sizing-rot-var
+    input_variety: true
+    report_coverage: 0.9
+    report_coverage_final: 0.4
+    curriculum:
+      - from_step: 0
+        field_count: 3
+        companies_per_field: 3
+      - from_step: 60
+        field_count: 4
+        companies_per_field: 4
+      - from_step: 120
+        field_count: 4
+        companies_per_field: 5
+
+variants:
+  - name: var-90-a
+    overrides:
+      simtrain:
+        advisor_accuracy: 0.9
+  - name: var-90-b
+    overrides:
+      project:
+        seed: 2338
+      simtrain:
+        advisor_accuracy: 0.9
+  - name: full-90-a
+    overrides:
+      simtrain:
+        base_stage: templatesft-sizing-rot-full
+        rehearsal_source: templatesft-sizing-rot-full
+        advisor_accuracy: 0.9
+  - name: full-90-b
+    overrides:
+      project:
+        seed: 2338
+      simtrain:
+        base_stage: templatesft-sizing-rot-full
+        rehearsal_source: templatesft-sizing-rot-full
+        advisor_accuracy: 0.9
+  - name: low-lr-a
+    overrides:
+      simtrain:
+        learning_rate: 0.000015
+  - name: low-lr-b
+    overrides:
+      project:
+        seed: 2338
+      simtrain:
+        learning_rate: 0.000015
+  - name: flat-max-a
+    overrides:
+      simtrain:
+        field_count: 4
+        companies_per_field: 5
+        curriculum: []
+  - name: flat-max-b
+    overrides:
+      project:
+        seed: 2338
+      simtrain:
+        field_count: 4
+        companies_per_field: 5
+        curriculum: []
+  - name: skeptic-a
+    overrides:
+      simtrain:
+        base_stage: templatesft-sizing-rot-skeptic
+        rehearsal_source: templatesft-sizing-rot-skeptic
+        input_variety: false
+  - name: skeptic-b
+    overrides:
+      project:
+        seed: 2338
+      simtrain:
+        base_stage: templatesft-sizing-rot-skeptic
+        rehearsal_source: templatesft-sizing-rot-skeptic
+        input_variety: false
+  - name: rehearse-05
+    overrides:
+      simtrain:
+        advisor_accuracy: 0.9
+        rehearsal_fraction: 0.05
+  - name: rehearse-0
+    overrides:
+      simtrain:
+        advisor_accuracy: 0.9
+        rehearsal_fraction: 0.0
+  - name: skeptic-600
+    overrides:
+      simtrain:
+        base_stage: templatesft-sizing-rot-skeptic
+        rehearsal_source: templatesft-sizing-rot-skeptic
+        input_variety: false
+        maximum_steps: 600
+  - name: long-600
+    overrides:
+      simtrain:
+        maximum_steps: 600
+  - name: skeptic-90
+    overrides:
+      simtrain:
+        base_stage: templatesft-sizing-rot-skeptic
+        rehearsal_source: templatesft-sizing-rot-skeptic
+        input_variety: false
+        advisor_accuracy: 0.9
+  - name: skeptic-flat
+    overrides:
+      simtrain:
+        base_stage: templatesft-sizing-rot-skeptic
+        rehearsal_source: templatesft-sizing-rot-skeptic
+        input_variety: false
+        field_count: 4
+        companies_per_field: 5
+        curriculum: []
