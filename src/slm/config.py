@@ -338,6 +338,30 @@ class SimTrainConfig:
 
 
 @dataclass
+class GameTrainConfig:
+    game: str = 'math'
+    game_parameters: dict = field(default_factory=dict)
+    base_run_dir: str = None
+    base_stage: str = None
+    rounds: int = 20
+    tasks_per_round: int = 256
+    samples_per_task: int = 4
+    keep_per_task: int = 1
+    sample_temperature: float = 0.8
+    sample_top_p: float = 0.95
+    max_new_tokens: int = 48
+    holdout_tasks: int = 200
+    battery_seed: int = 515151
+    replay_blocks: int = 32
+    learning_rate: float = 1e-5
+    weight_decay: float = 0.0
+    gradient_clip: float = 1.0
+    batch_size: int = 16
+    epochs_per_round: int = 1
+    empty_round_limit: int = 3
+
+
+@dataclass
 class SimEvalConfig:
     games: int = 200
     quarters: int = 8
@@ -420,6 +444,7 @@ class Config:
     sfteval: SftEvalConfig = field(default_factory=SftEvalConfig)
     simtrain: SimTrainConfig = field(default_factory=SimTrainConfig)
     simeval: SimEvalConfig = field(default_factory=SimEvalConfig)
+    gametrain: GameTrainConfig = field(default_factory=GameTrainConfig)
     eval: EvalConfig = field(default_factory=EvalConfig)
     graph: GraphConfig = field(default_factory=GraphConfig)
     scale: ScaleConfig = field(default_factory=ScaleConfig)
@@ -526,6 +551,7 @@ _SECTION_TYPES = {
     'sfteval': SftEvalConfig,
     'simtrain': SimTrainConfig,
     'simeval': SimEvalConfig,
+    'gametrain': GameTrainConfig,
     'eval': EvalConfig,
     'graph': GraphConfig,
     'scale': ScaleConfig,

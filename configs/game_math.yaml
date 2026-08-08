@@ -1,0 +1,41 @@
+project:
+  name: sgm-game-math
+  out_dir: runs/game_math
+  seed: 1337
+
+gametrain:
+  game: math
+  base_run_dir: null
+  base_stage: bridgesft
+  rounds: 20
+  tasks_per_round: 256
+  samples_per_task: 4
+  keep_per_task: 1
+  sample_temperature: 0.8
+  sample_top_p: 0.95
+  max_new_tokens: 48
+  holdout_tasks: 200
+  replay_blocks: 32
+  learning_rate: 0.00001
+  batch_size: 16
+  epochs_per_round: 1
+  empty_round_limit: 3
+  game_parameters:
+    maximum_value: 200
+
+model:
+  preset: poc-60m
+  block_size: 1024
+  dropout: 0.05
+  tie_embeddings: true
+
+slurm:
+  enabled: true
+  partition: null
+  account: null
+  gres: gpu:l40s:1
+  memory: 64G
+  cpus_per_task: 8
+  time_limit: "06:00:00"
+  log_dir: runs/game_math/slurm_logs
+  extra_sbatch: []
